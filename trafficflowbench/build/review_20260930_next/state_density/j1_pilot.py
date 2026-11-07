@@ -1,5 +1,19 @@
 """Preregistered CAP-aligned density pilot; writes only beside this script."""
+# Research record of the J1 density head; pipeline/task1.sh does not run it.
+# j1_official.py and density_gate/sg1.py import it (D, fb, sha, dump,
+# build_predictions). J1: a LightGBM that predicts the per-lane density error
+# (true minus parent density, veh/km/lane) of the CAP state on the general
+# (non-hole) Task 1 cells of the 8 Task 2 panels; speed and flow are then
+# projected halfway onto the corrected density (density_experiment.project,
+# alpha 0.5). CAP: the capacity-model state candidate. The head is fit on
+# February 2031 with parents fit on January; `fit_final` writes the served
+# head cap_full_feb.txt.
+# Phases: prepare (feature matrices X_cap.npy / X_raw.npy, meta.parquet,
+# parents.npz), train (odd/even-day fits per arm), evaluate (February
+# scoring, feb_results.json), fit_final (full February fit).
+# Usage: j1_pilot.py prepare | train | evaluate | fit_final
 import os
+# Caps the BLAS/OpenMP thread pools at 2 before numpy and LightGBM load.
 for k in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','VECLIB_MAXIMUM_THREADS'):
     os.environ[k]='2'
 import sys,json,time,gc,resource,hashlib
@@ -13,19 +27,31 @@ NOISE=ROOT/'build/review_20260929_target092/noise_floor'
 sys.path.insert(0,str(STRUCT));sys.path.insert(0,str(NOISE));sys.path.insert(0,str(ROOT))
 import density_experiment as D
 import fb
+# Sets the thread limits again after the imports (density_experiment sets 3).
 for k in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','VECLIB_MAXIMUM_THREADS'):
     os.environ[k]='2'
+# PARAMS: LightGBM recipe of the density head (200 rounds).
 PARAMS=dict(objective='regression_l2',learning_rate=.05,num_leaves=31,min_data_in_leaf=400,lambda_l2=10,
             feature_fraction=.8,bagging_fraction=.8,bagging_freq=1,num_threads=2,seed=0,verbose=-1,
             force_col_wise=True)
 def dump(name,obj):
+    """Writes `obj` as indented JSON next to this file (NaN not allowed)."""
     (HERE/name).write_text(json.dumps(obj,indent=2,allow_nan=False))
 def sha(p):
+    """Returns the SHA256 hex digest of file `p`."""
     h=hashlib.sha256()
     with open(p,'rb') as f:
         for b in iter(lambda:f.read(4*1024*1024),b''):h.update(b)
     return h.hexdigest()
 def prepare():
+    """Builds the head inputs for the February 2031 general target cells (skipped when done).
+
+    Writes X_cap.npy and X_raw.npy (float32 feature matrices with the CAP or
+    the raw RLB values in the parent columns), meta.parquet (keys, lanes,
+    date, day parity, truth, raw parent, true density), parents.npz (CAP,
+    DK50 and the RLB + k* state of the HMP50 submission; speed km/h,
+    per-lane flow) and prepared.json.
+    """
     start=time.time()
     if (HERE/'prepared.json').exists():return
     fs=json.loads((STRUCT/'density/features.json').read_text())
@@ -62,6 +88,13 @@ def prepare():
         source_sha={str(fb.PRED.relative_to(ROOT)):sha(fb.PRED),'PREREGISTRATION.md':sha(HERE/'PREREGISTRATION.md')},
         seconds=time.time()-start,maxrss=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss))
 def train():
+    """Fits the head on one day parity of the 8 Task 2 panels and predicts the other, for both arms.
+
+    Arm 'cap' uses the CAP parent density, arm 'raw' the raw RLB parent
+    density. Writes <arm>_fit<odd|even>.txt, <arm>_fit<odd|even>_pred.npy
+    (corrected density, veh/km/lane, on the held-out days) and
+    training_complete.json.
+    """
     start=time.time();meta=pd.read_parquet(HERE/'meta.parquet');parents=np.load(HERE/'parents.npz');fs=json.loads((HERE/'prepared.json').read_text())['features']
     true_k=meta.true_k.to_numpy();active=(meta.panel_i<8).to_numpy();odd=meta.odd.to_numpy();record=[]
     for arm in ['cap','raw']:
@@ -87,6 +120,22 @@ def train():
         del x,y;gc.collect()
     dump('training_complete.json',dict(params=PARAMS,rounds=200,records=record,seconds=time.time()-start))
 def build_predictions(arm,fitodd,meta,parents):
+    """Returns the candidate speed and per-lane flow for one arm and fold.
+
+    On the held-out days of the 8 Task 2 panels, projects the base state
+    halfway onto the predicted density (D.project, alpha 0.5). Arm 'cap'
+    projects the CAP state; arm 'raw' projects the RLB + k* state and adds the
+    CAP - DK50 difference. All other cells keep the CAP values.
+
+    Args:
+      arm: 'cap' or 'raw'.
+      fitodd: True when the head was fit on odd days.
+      meta: Rows of meta.parquet.
+      parents: Arrays of parents.npz.
+
+    Returns:
+      (v, q): speed (km/h, 3 decimals) and per-lane flow (vph/lane).
+    """
     odd=meta.odd.to_numpy();held=~(odd==fitodd);tag=f'{arm}_fit'+('odd' if fitodd else 'even');kk=np.load(HERE/f'{tag}_pred.npy')
     cv=parents['cap_v'].copy();cq=parents['cap_q'].copy()
     for pi,p in enumerate(D.E.PANELS10[:8]):
@@ -98,6 +147,12 @@ def build_predictions(arm,fitodd,meta,parents):
         cv[ix]=np.round(np.clip(vv,6,120.75),3);cq[ix]=np.round(np.maximum(qq,50),3)/ln
     return cv,cq
 def fit_final():
+    """Fits the served J1 head on all February 2031 rows of the 8 Task 2 panels and saves cap_full_feb.txt.
+
+    Raises:
+      AssertionError: When the model already exists, the February gate did
+        not pass or the freeze note is missing.
+    """
     start=time.time();model=HERE/'cap_full_feb.txt'
     assert not model.exists(),'Refuse to replace frozen full model'
     assert json.loads((HERE/'feb_results.json').read_text())['pass_feb']
@@ -112,8 +167,20 @@ def fit_final():
     dump('full_fit.json',dict(params=PARAMS,rounds=200,fit_rows=n,parent_out_of_fit=True,fit_month='February',parent_fit_month='January',model_sha=sha(model),freeze_sha=sha(HERE/'FROZEN_TRANSFER_FULL.md'),seconds=time.time()-start,maxrss=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss))
     print('FULL_FIT_DONE',time.time()-start,flush=True)
 def summarize(data,baseline='C0'):
+    """Returns proxy score levels and their changes against `baseline` per candidate, and the per-panel table."""
     level,p,_=fb.summarize(data);delta=level.subtract(level.loc[baseline]);return dict(levels=level.to_dict('index'),deltas=delta.to_dict('index')),p
 def evaluate():
+    """Scores the fold candidates on February 2031 and writes feb_results.json.
+
+    Candidates: C0 (CAP), C1 (arm 'cap') and R1 (arm 'raw'), scored on the
+    held-out dates with fb.score. Also checks that C0 reproduces the CAP
+    confirmation report, scores the assembled all-out-of-fold C1, and runs a
+    1000-draw day bootstrap. pass_feb requires a positive total_B change of C1
+    in both folds and a positive lower interval bound.
+
+    Returns:
+      The report dict.
+    """
     start=time.time();meta=pd.read_parquet(HERE/'meta.parquet');parents=np.load(HERE/'parents.npz');rows=[];combined=[]
     parity={};fkeys=fb.keys()
     assert np.array_equal(meta[['panel_i','day','li','ci']].to_numpy(),fkeys[['panel_i','day','li','ci']].to_numpy())

@@ -1,4 +1,17 @@
 """Genuine80 ongoing serving inputs only; no model inference or CSV writes."""
+# Runs in pipeline/ongoing.sh ("r20_prepare"), first step of the R20 operator.
+# Builds the serving inputs of the 80 official queue_ongoing windows (5 per
+# panel and split). Per window it reads the released masked day (values at
+# the forecast time T), the window's own released history (slots T-12..T-1),
+# ramp counts at T and T-1, and recency from up to 5 earlier released days of
+# the same split. No model runs here and no CSV is written.
+# Outputs in this folder, per split: <split>_base98.npy (the 98 base features
+# FS per window, link and horizon step), <split>_encoder.npy (encoder input,
+# 4 x 9 x 13 per window and link, from PublishedPanel.encode),
+# <split>_base196.npy (base features after TRANSFORM_base196.json),
+# <split>_ROW_INDEX.parquet, <split>_CENTER_INDEX.parquet and
+# <split>_SUBMISSION_MAP.parquet (row -> submission_id); plus WINDOWS.parquet
+# and INPUT_MANIFEST.json (source and code hashes, look-ahead audits).
 import os,sys
 for key in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','VECLIB_MAXIMUM_THREADS'):os.environ[key]='2'
 sys.dont_write_bytecode=True
@@ -9,9 +22,18 @@ from public_operator import D,PublishedPanel,FIELDS
 from prepare_march import legal_frame,source_poison
 from transform import transform_block
 import gc,time,resource,itertools
+# EXPECTED_PARENT_SHA / PARENT: the R16b submission CSV; submission_binding no
+# longer reads them (package edit).
 EXPECTED_PARENT_SHA='05cebca599b04cba99802d2f97ab2a2145e6992cc3af12fa77c415a5770c5d64'
 PARENT=ROOT/'build/deliverables/2026-09-30/submission_R16b_R11c_CAPDENS_C85.csv'
 def indexes():
+    """Reads the official queue_ongoing windows of both splits.
+
+    Returns:
+      (windows, hashes): the 80 windows with window_id, panel, split, date,
+      forecast_origin, condition, origin (timestamp) and T (5-minute slot of
+      the forecast time), and the SHA256 of each window_index.csv read.
+    """
     records=[];source={}
     for split in ['validation','private']:
         for panel in PANELS:
@@ -23,6 +45,19 @@ def indexes():
             assert w.window_id.is_unique;records.append(w);source[str(path)]=sha(path)
     idx=pd.concat(records,ignore_index=True);assert len(idx)==80 and idx.window_id.is_unique;return idx,source
 def submission_binding(windows):
+    """Maps the queue rows of the official windows to their submission ids.
+
+    Checks that sample_submission.csv and submission_key.csv list the ids
+    1..N in order. Only id, task, split, panel, window, link and timestamp are
+    read from the key; no prediction column is read.
+
+    Args:
+      windows: Output of `indexes`.
+
+    Returns:
+      (mapping, binding): the 87,000 queue rows of the windows with
+      submission_id and submission_row_index, and a provenance dict.
+    """
     rel=D.R.RELEASE;sample=rel/'sample_submission.csv';key=rel/'submission_key.csv'  # package edit: R16b CSV SHA assert removed (whole-submission file, not regenerable here)
     cols=['submission_id','task'];dtype={'submission_id':np.int64,'task':str}
     si=pd.read_csv(sample,usecols=cols,dtype=dtype,chunksize=100000)
@@ -43,6 +78,13 @@ def submission_binding(windows):
     return mapping,dict(files=files,total_submission_rows=rows,all_queue_rows=queue,active_ongoing_mapped_rows=len(mapping),
         sample_R16b_all_ID_task_order_exact='not checked (package edit: R16b binding removed)',ID_task_order_hash=h.hexdigest(),parent_identity='R16bref56697520public.90144',no_prediction_columns_read=True)
 def run():
+    """Builds and writes the serving inputs of both splits and the input manifest.
+
+    Raises:
+      AssertionError: When an output already exists, a recorded code hash
+        differs, a window history is not exactly the 12 slots before T, or a
+        row count or mapping check fails.
+    """
     assert not(HERE/'INPUT_MANIFEST.json').exists();start=time.time();windows,indexhash=indexes()
     core=json.loads((Q/'INPUT_MANIFEST.json').read_text());assert core['PASS']
     for path,h in core['code_hashes'].items():assert sha(path)==h,path
@@ -50,6 +92,8 @@ def run():
     spec=json.loads((Q/'TRANSFORM_base196.json').read_text());assert sha(Q/'TRANSFORM_base196.json')==core['base_transform_sha256']
     sourcefiles=dict(indexhash);records={};audits=[];profiles=[];recency_sources=[];ramp_sources=[]
     for split in ['validation','private']:
+        # n = 43,500 rows per split: links of the 8 panels x 6 horizon steps x
+        # 5 windows.
         win=windows[windows.split.eq(split)].copy();n=sum(len(strict[p]['links'])*6*5 for p in PANELS);assert n==43500
         basepath=HERE/f'{split}_base98.npy';encpath=HERE/f'{split}_encoder.npy';assert not basepath.exists()and not encpath.exists()
         base=np.lib.format.open_memmap(basepath,mode='w+',dtype=np.float64,shape=(n,98));enc=np.lib.format.open_memmap(encpath,mode='w+',dtype=np.float32,shape=(n//6,4,9,13))
@@ -61,6 +105,9 @@ def run():
             for path in [D.R.truth_files(panel,'train')[0]]+[D.R.RELEASE/f'corridors/{panel}/network/{name}.csv'for name in ['links','fd_parameters','ramp_attachment_map']]:
                 sourcefiles[str(path)]=sha(path)
             hp=D.R.RELEASE/f'task2/{panel}/{split}/window_history.parquet';sourcefiles[str(hp)]=sha(hp)
+            # Per window: history = the released window_history (slots T-12..T-1);
+            # features from direct.Context.features (legal_frame); encoder input
+            # from PublishedPanel.encode.
             for i,w in enumerate(win[win.panel.eq(panel)].itertuples()):
                 origin=pd.Timestamp(w.origin);T=int(w.T);raw=P.day(P.published[w.date]);sourcefiles[str(P.published[w.date])]=sha(P.published[w.date])
                 h=P.own_history(w.window_id,origin);assert h is not None
@@ -80,6 +127,8 @@ def run():
                     a=h[col].to_numpy();b=raw[col][rr,tt];diffs[col]=int((~((a==b)|(pd.isna(a)&pd.isna(b)))).sum())
                 profiles.append(dict(window_id=w.window_id,panel=panel,split=split,date=w.date,history_rows=len(h),history_preT_exact=True,
                     genuine_history_vs_raw_past_mismatches=diffs,encoder_joint_observed_fraction=float(x[:,3,4,:].mean()),origin_source='unaltered rawpublishedT'))
+                # The first window of each panel also gets the junk-after-T check
+                # (source_poison).
                 if i==0:audits.append({**source_poison(P,c,w.date,T,w.window_id,raw,h),'split':split})
                 roff+=len(f);coff+=len(P.links)
             # Bind the exact ramp source selected by TB.ramp_day and every
@@ -100,6 +149,7 @@ def run():
         assert np.array_equal(ri.physical_row,np.arange(len(ri)))and np.array_equal(ci.center_row,np.arange(len(ci)))
         assert np.array_equal(pd.MultiIndex.from_frame(ci.loc[ri.center,['window_id','link_id']]),pd.MultiIndex.from_frame(ri[['window_id','link_id']]))
         ri.to_parquet(HERE/f'{split}_ROW_INDEX.parquet',index=False);ci.to_parquet(HERE/f'{split}_CENTER_INDEX.parquet',index=False)
+        # base196: the 98 base features transformed in blocks of 20,000 rows.
         x=np.load(basepath,mmap_mode='r');outpath=HERE/f'{split}_base196.npy';out=np.lib.format.open_memmap(outpath,mode='w+',dtype=np.float32,shape=(n,196))
         for begin in range(0,n,20000):v=transform_block(x[begin:begin+20000],spec);out[begin:begin+len(v)]=v
         out.flush();out._mmap.close();x._mmap.close();del x,out

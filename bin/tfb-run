@@ -10,12 +10,24 @@
 # write stays inside the run tree and source bytes match the recorded originals.
 set -eu
 [ $# -ge 2 ] || { echo "usage: tfb-run <run_root> <program.py> [args...]" >&2; exit 2; }
+# RUN: the run tree root (physical path); REPO: its trafficflowbench/ copy.
 RUN=$(cd "$1" && pwd -P); shift
 REPO="$RUN/trafficflowbench"
+# Interpreter: TFB_PYTHON (exported by run_reproduce.sh), else python3 on PATH.
 PY=${TFB_PYTHON:-python3}
+# PYDIR: the interpreter's environment folder (parent of its bin/). The path layer maps the
+# development tree's trafficflowbench/.venv paths onto it through TFB_RUNTIME_ENV.
 PYDIR=$(cd "$(dirname "$(command -v "$PY")")/.." && pwd -P)
+# TFB_SSD_COMPAT=1 makes ssd_bootstrap/sitecustomize.py install the path layer when the interpreter
+# starts, also in child processes. No .pyc files are written into the run tree.
 export PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 TFB_SSD_COMPAT=1
+# TFB_REPO_ROOT and TFB_WORKSPACE_ROOT tell the package wrappers (pipeline/od.py, onset_*.py) where
+# the run tree is.
 export TFB_REPO_ROOT="$REPO" TFB_WORKSPACE_ROOT="$RUN" TFB_RUNTIME_ENV="$PYDIR"
+# Search path: the bootstrap folder first (so its sitecustomize.py is found), then the repo root,
+# src/ and scripts/ (where ssd_runtime.py lives).
 export PYTHONPATH="$REPO/scripts/ssd_bootstrap:$REPO:$REPO/src:$REPO/scripts"
+# Programs start in the repo root, so relative paths such as build/... resolve inside the run tree.
 cd "$REPO"
+# ssd_runtime.main() runs "<program.py> [args...]" like the python command, with the path layer on.
 exec "$PY" -c 'import ssd_runtime; ssd_runtime.main()' "$@"

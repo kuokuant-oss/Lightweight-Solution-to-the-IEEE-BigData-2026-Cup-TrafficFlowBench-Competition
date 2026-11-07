@@ -5,6 +5,8 @@ asserts that its ongoing cells equal review_20261001_fresh/serve/decisions_C1f_<
 written by s3_patch_csv.py from exactly that delta). This script saves that delta in the same structure
 (int8 arrays keyed validation, private, in SUBMISSION_MAP row order).
 """
+# Runs in pipeline/ongoing.sh ("r21a_bits"), after s2_decide.py.
+# R21a = where(C1f != same-operator parent, C1f, R16b).
 import numpy as np
 from pathlib import Path
 HERE = Path(__file__).resolve().parent

@@ -31,17 +31,30 @@ import pandas as pd
 
 from . import release as R, score2
 
+# Role: the Task 2 training and audit programs (for example
+# scripts/145_onset_prior_forward.py and scripts/strongest_20260922_ongoing.py)
+# score with iou_frame and s_queue, the local copy of the official metric:
+# per-window IoU, then equal-weight means over window -> (panel, condition)
+# -> panel -> family. The other functions are the record of the
+# candidate-comparison harness.
+# CONDITIONS: the two window types, queue onset (no queue in the history) and
+# queue ongoing (a queue visible in the history).
 CONDITIONS = ("queue_onset", "queue_ongoing")
 
 
 def logit(p, eps=1e-4):
     """scripts/51.logit, verbatim -- the init_score the frozen model was fit with."""
+    # NaN counts as 0, and probabilities are clipped to [eps, 1 - eps].
     p = np.clip(np.nan_to_num(p, nan=0.0), eps, 1 - eps)
     return np.log(p / (1 - p))
 
 
 def add_probs(d: pd.DataFrame, model_dir: Path, col: str = "prob") -> pd.DataFrame:
     """Per-condition frozen booster + the historical-prior init_score."""
+    # Loads lgb_queue_onset.txt and lgb_queue_ongoing.txt from `model_dir`.
+    # Each booster's raw score is added to logit(queue_prior), so the prior is
+    # the starting log-odds. Rows of a condition without a model file get 0.
+    # Returns a copy of `d` with the probabilities in column `col`.
     import lightgbm as lgb
     d = d.copy()
     d[col] = np.nan
@@ -62,6 +75,10 @@ def add_probs(d: pd.DataFrame, model_dir: Path, col: str = "prob") -> pd.DataFra
 
 def connected_filter(d: pd.DataFrame, pred_col: str, min_size: int) -> np.ndarray:
     """scripts/51.connected_filter, verbatim: drop blobs under min_size."""
+    # Per window, the predicted cells form a (link x step) image with links
+    # ranked by milepost; 4-connected components (scipy.ndimage.label
+    # default) smaller than `min_size` cells are set to 0. Returns the
+    # filtered 0/1 array aligned with `d`.
     from scipy import ndimage
     keep = d[pred_col].to_numpy().copy()
     for _, idx in d.groupby("window_id", sort=False).indices.items():
@@ -84,6 +101,8 @@ def connected_filter(d: pd.DataFrame, pred_col: str, min_size: int) -> np.ndarra
 def decide(d: pd.DataFrame, thr: dict[str, float], min_size: int = 1,
            prob_col: str = "prob") -> np.ndarray:
     """Threshold per condition, then the optional component filter."""
+    # `thr` maps condition -> probability threshold; a cell is predicted
+    # queued when prob >= thr. Returns a 0/1 array aligned with `d`.
     p = (d[prob_col].to_numpy() >= d.condition.map(thr).to_numpy()).astype(int)
     if min_size and min_size > 1:
         return connected_filter(d.assign(_p=p), "_p", int(min_size))
@@ -92,6 +111,9 @@ def decide(d: pd.DataFrame, thr: dict[str, float], min_size: int = 1,
 
 def iou_frame(d: pd.DataFrame, pred: np.ndarray) -> pd.DataFrame:
     """Per-window IoU. scripts/51.iou_frame, with the prediction passed in."""
+    # Returns one row per window: inter and union cell counts, IoU (1.0 when
+    # the union is empty, as in the official scorer), family_id and the date
+    # parsed from window_id ("panel|date|origin").
     p = np.asarray(pred) > 0
     y = d.label.to_numpy() > 0
     t = pd.DataFrame({"window_id": d.window_id.to_numpy(), "panel": d.panel.to_numpy(),
@@ -112,6 +134,8 @@ def s_queue(frame: pd.DataFrame) -> float:
 
 def subgroups(frame: pd.DataFrame) -> dict[str, float]:
     """Condition means and per-panel means, each aggregated the official way."""
+    # Each per-panel value is the mean over conditions of the mean window IoU;
+    # worst_panel is the lowest of them.
     out: dict[str, float] = {}
     for cond in CONDITIONS:
         g = frame[frame.condition == cond]
@@ -130,6 +154,10 @@ def paired_bootstrap(a: pd.DataFrame, b: pd.DataFrame, n_boot: int = 2000,
     a and b must cover the same windows; the pairing is what removes the
     window-difficulty variance that dominates a single score's spread.
     """
+    # Returns the point delta, the 2.5 and 97.5 percentiles of the resampled
+    # deltas, their mean and sd, the share of resamples with delta > 0, and
+    # the resample and block counts.
+    # Raises RuntimeError when a and b cover different windows.
     a = a.sort_values("window_id").reset_index(drop=True)
     b = b.sort_values("window_id").reset_index(drop=True)
     if not a.window_id.equals(b.window_id):
@@ -152,6 +180,8 @@ def paired_bootstrap(a: pd.DataFrame, b: pd.DataFrame, n_boot: int = 2000,
 def replicate_deltas(a: pd.DataFrame, b: pd.DataFrame,
                      manifests: dict[int, pd.DataFrame]) -> pd.DataFrame:
     """S_queue for both methods on each official-shaped manifest."""
+    # `manifests` maps seed -> manifest with a window_id column. Returns one
+    # row per seed with both scores and their delta.
     ia = a.set_index("window_id")
     ib = b.set_index("window_id")
     rows = []
@@ -165,6 +195,7 @@ def replicate_deltas(a: pd.DataFrame, b: pd.DataFrame,
 
 
 def replicate_summary(rep: pd.DataFrame) -> dict[str, float]:
+    """Summarises replicate deltas: mean, median, sd, 95% range, win/tie rate."""
     d = rep.delta.to_numpy()
     lo, hi = np.percentile(d, [2.5, 97.5])
     return {"n_replicates": len(d), "delta_mean": float(d.mean()),
@@ -182,6 +213,9 @@ def choose_thresholds(d: pd.DataFrame, grid_t: np.ndarray | None = None,
     Only ever call this on calib rows (or, for a rolling-origin fold, on the
     dates strictly before that fold).
     """
+    # Grid: 0.050 to 0.950 in steps of 0.025. Both thresholds start at 0.5;
+    # each pass tunes one condition at a time with the other fixed and keeps
+    # the first grid value with the best s_queue.
     grid_t = np.round(np.arange(0.05, 0.96, 0.025), 3) if grid_t is None else grid_t
     thr = {c: 0.5 for c in CONDITIONS}
     for _ in range(passes):

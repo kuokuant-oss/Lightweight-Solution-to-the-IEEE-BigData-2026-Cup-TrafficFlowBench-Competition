@@ -9,6 +9,13 @@ Features: G2 base features (profile = g2/<panel>_profile_all.npz, all 9 train mo
 template from all 9 train months, blocks from train, selector features from the masked layer + window
 spacing in window_index).  Nothing inside the hole is read (asserted).
 Usage: serve_v2.py --model <dir> --out <parquet> [--check-sel]"""
+#
+# Role: reproduction pipeline, task1.sh step 4: `--model build/review_20260924_ctm/g2v2/models/v2_F --out
+# build/review_20260925/task1/g2v2F_state_rows.parquet`. v2_F is the final G2v2 model; its flow gives the final
+# flow inside the holes. The model folder holds gap_features.json, gap_speed.txt (speed model) and gap_flow.txt
+# (per-lane flow model).
+# Outputs: <out> (submission_id, speed_kmh, flow_vph), <out stem>_windows.csv (rows per window and selector
+# features) and <out stem>_selcheck.csv (selector features compared with dense/sel2_<split>.parquet).
 import os, sys, json, argparse, time
 os.environ.setdefault('OMP_NUM_THREADS', '4')
 import numpy as np, pandas as pd, lightgbm as lgb
@@ -25,6 +32,7 @@ SEL2 = ROOT / 'build/review_20260924_ctm/dense'
 
 
 def main():
+    """Predicts speed and flow for every Task 1 key row inside a Task 2 hole and writes them."""
     ap = argparse.ArgumentParser(); ap.add_argument('--model', required=True); ap.add_argument('--out', required=True)
     a = ap.parse_args(); out = Path(a.out); assert not out.exists(), f'refusing to overwrite {out}'
     t0 = time.time(); md = Path(a.model)
@@ -32,16 +40,20 @@ def main():
     ms = lgb.Booster(model_file=str(md / 'gap_speed.txt')); mf = lgb.Booster(model_file=str(md / 'gap_flow.txt'))
     key = pd.read_csv(R.RELEASE / 'submission_key.csv', usecols=['submission_id', 'task', 'split', 'panel', 'timestamp', 'link_id'], dtype=str)
     key = key[key.task == 'state']
+    # (split, panel, timestamp, link_id) -> submission_id of the state rows.
     kidx = dict(zip(zip(key.split, key.panel, key.timestamp, key.link_id), key.submission_id.astype(int)))
     recs, audit, selchk = [], [], []
     for panel in PANELS:
         prof = np.load(G2W / 'g2' / f'{panel}_profile_all.npz', allow_pickle=True)
+        # Static queued-speed template from all train months.
         tz = np.load(HERE / 'rows' / f'{panel}_tmpl.npz', allow_pickle=True)
         tmed, tiqr = template_from_hist(tz['hist'].sum(0))
         for split in ('validation', 'private'):
             wi = pd.read_csv(R.RELEASE / 'task2' / panel / split / 'window_index.csv')
             wi['T'] = pd.to_datetime(wi.forecast_origin, utc=True); wi = wi.sort_values('T').reset_index(drop=True)
+            # Minutes since the previous official window of the panel (any condition); NaN for the first one.
             wi['gap_min'] = wi['T'].diff().dt.total_seconds() / 60
+            # dense/sel2_<split>.parquet is read only to cross-check the selector features.
             sel2 = pd.read_parquet(SEL2 / f'sel2_{split}.parquet').set_index('window_id')
             files = {p.name[len('synthetic_mainline_'):-len('.parquet')].replace('_', '-'): p for p in P1.split_masked_files(panel, split)}
             for date, ws in wi.groupby('date'):
@@ -52,6 +64,7 @@ def main():
                 times = [str(t) for t in g.times]; nT = len(times); wd = pd.Timestamp(date).weekday()
                 V = g.value['speed_kmh'].astype(np.float32); Q = g.value['flow_vph'].astype(np.float32); O = g.value['occupancy'].astype(np.float32)
                 for _, w in ws.iterrows():
+                    # The hole starts at forecast_start, the step after the forecast origin T.
                     a_ = times.index(w.forecast_start); assert times[a_ - 1] == w.forecast_origin
                     seg = slice(a_, min(a_ + LG, nT))
                     assert np.isnan(V[:, seg]).all() and np.isnan(Q[:, seg]).all(), 'hole not blank'
@@ -65,7 +78,9 @@ def main():
                     X = pd.DataFrame({k: np.asarray(v).reshape(-1).astype(np.float32) for k, v in f.items()})
                     X['panel_c'] = pd.Categorical([panel] * len(X), categories=PANELS)
                     pv = np.clip(ms.predict(X[feats]), P1.SPEED_FLOOR, P1.SPEED_CAP).reshape(f['step'].shape)
+                    # The flow model predicts flow per lane; multiplied back by the lanes.
                     pq = np.maximum(mf.predict(X[feats]) * np.repeat(lanes[:, None], LG, 1).reshape(-1), P1.FLOW_FLOOR).reshape(f['step'].shape)
+                    # Keep the hole cells that exist in submission_key.csv.
                     n = 0
                     for s in range(min(LG, nT - a_)):
                         for li, l in enumerate(links):

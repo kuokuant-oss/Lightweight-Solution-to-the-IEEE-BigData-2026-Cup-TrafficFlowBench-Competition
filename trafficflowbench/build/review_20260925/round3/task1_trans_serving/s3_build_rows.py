@@ -7,6 +7,10 @@
   s3_build_rows.py official <split> [panels] every eligible cell of the 80 official holes of the split, build_ph feature
                                             path (as round2 verify/off_apply.py) + timestamp/link_id
                                             -> work/off_rows_<split>.parquet"""
+# Task 1 reproduction pipeline, step 5 (`pipeline/task1.sh`, logs `ph_private`
+# and `off_rows_<split>`). Rows have the columns of
+# round2/task1_trans/build_ph.py; official rows have no truth columns and add
+# timestamp, link_id and window_id.
 import os, sys, json, time
 sys.dont_write_bytecode = True
 os.environ.setdefault('OMP_NUM_THREADS', '3')
@@ -22,17 +26,33 @@ from s2_cands import parent_state
 
 
 def load_masked(panel, split):
+    """Returns the masked day grids of a panel and split, sorted by date."""
     grids = [grid.build_masked(panel, p) for p in P1.split_masked_files(panel, split)]
     order = np.argsort([g.date for g in grids], kind='stable')
     return [grids[i] for i in order]
 
 
 def models():
+    """Returns (feature list, speed booster, flow booster) of the G2v2 v2_F hole model."""
     feats = json.load(open(MD / 'gap_features.json'))
     return feats, lgb.Booster(model_file=str(MD / 'gap_speed.txt')), lgb.Booster(model_file=str(MD / 'gap_flow.txt'))
 
 
 def g2v2_predict(ms, mf, feats, f, panel, lanes):
+    """Predicts hole speed and flow with G2v2 v2_F.
+
+    Args:
+      ms: speed booster.
+      mf: flow-per-lane booster.
+      feats: feature list.
+      f: dict of (L, LG) feature arrays from gap_matrix.
+      panel: corridor name (categorical feature panel_c).
+      lanes: lanes per link.
+
+    Returns:
+      (pv, pq): (L, LG) speed in km/h (within the speed floor and cap) and
+      flow in veh/h (at least the flow floor).
+    """
     X = pd.DataFrame({k: np.asarray(v).reshape(-1).astype(np.float32) for k, v in f.items()})
     X['panel_c'] = pd.Categorical([panel] * len(X), categories=PANELS)
     pv = np.clip(ms.predict(X[feats], num_threads=3), P1.SPEED_FLOOR, P1.SPEED_CAP).reshape(f['step'].shape)
@@ -41,6 +61,12 @@ def g2v2_predict(ms, mf, feats, f, panel, lanes):
 
 
 def panel_ctx(panel, split):
+    """Returns the per-panel context of a split.
+
+    Day grids, link order and parameters, queue thresholds, lanes, blocks,
+    train weekday profile, static queued-speed templates, split statistics
+    and the official window index.
+    """
     grids = load_masked(panel, split)
     links = [str(x) for x in grids[0].links]; times0 = [pd.Timestamp(t).strftime('%H:%M:%S') for t in grids[0].times]
     par = physics.link_params(panel, links); vcut = 0.6 * par['free_speed_kmh']; lanes = np.maximum(par['lanes'], 1.0)
@@ -57,6 +83,15 @@ def panel_ctx(panel, split):
 
 
 def split_feats(d, st, li, cc, a_):
+    """Adds split statistics to the row dict `d`.
+
+    Args:
+      d: column dict of the rows being built.
+      st: dict of (L, T) arrays from SplitStats.loo.
+      li: link index per row.
+      cc: slot of the cell per row.
+      a_: first hole slot; the pre and post columns read slots a_-1 and a_+LG.
+    """
     for k, x in st.items(): d[k] = x[li, cc].astype(np.float32)
     for k, c_ in (('pre', a_ - 1), ('post', a_ + LG)):
         d[f's_v_{k}'] = st['s_v'][li, c_].astype(np.float32); d[f's_qf_{k}'] = st['s_qf'][li, c_].astype(np.float32)
@@ -64,6 +99,15 @@ def split_feats(d, st, li, cc, a_):
 
 
 def build_official(split, panels):
+    """Builds the feature rows of every eligible cell of the official holes.
+
+    gap_min is the time in minutes since the panel's previous official window
+    (all dates of the split, in origin order), the selector spacing feature.
+
+    Returns:
+      Frame with the build_ph columns except truth, plus timestamp, link_id
+      and window_id.
+    """
     feats, ms, mf = models(); parts = []
     for panel in panels:
         C = panel_ctx(panel, split); byd = {g.date: (i, g) for i, g in enumerate(C['grids'])}
@@ -72,6 +116,7 @@ def build_official(split, panels):
         for _, w in wi.iterrows():
             di, g = byd[w.date]; a_ = C['times0'].index(w.forecast_start[11:19]); T = a_ - 1; seg = slice(a_, a_ + LG)
             V = g.value['speed_kmh']; Q = g.value['flow_vph']; O = g.value['occupancy']; E = g.eligible
+            # The official hole (T+1 .. T+18) is blank in the released layer.
             assert np.isnan(V[:, seg]).all() and np.isnan(Q[:, seg]).all()
             wd = pd.Timestamp(w.date).weekday()
             f = gap_matrix(V, Q, O, E, a_, C['nT'], C['par'], C['vcut'], C['prof'][f'speed_kmh_{wd}'], C['prof'][f'flow_vph_{wd}'], C['bid'],
@@ -92,6 +137,7 @@ def build_official(split, panels):
 
 
 def build_pseudo_private(panels):
+    """Writes work/ph_private_<panel>.parquet: build_ph.py's validation path on the private month."""
     feats, ms, mf = models()
     PW = B.pseudo_windows_validation(pd.read_parquet(HERE / 'work' / 'cands_private.parquet'), check=False)
     PW.to_parquet(HERE / 'work' / 'windows_private.parquet', index=False)
@@ -153,6 +199,7 @@ def build_pseudo_private(panels):
 
 
 def main():
+    """Runs `pseudo private [panels]` or `official <split> [panels]`."""
     mode = sys.argv[1]
     if mode == 'pseudo':
         assert sys.argv[2] == 'private'

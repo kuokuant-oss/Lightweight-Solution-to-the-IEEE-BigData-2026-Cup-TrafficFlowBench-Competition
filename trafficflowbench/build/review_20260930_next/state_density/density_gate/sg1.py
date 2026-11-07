@@ -1,5 +1,14 @@
 """Preregistered SG1. No training; diagnostics/output only beside this file."""
+# Research record of the SG1 gate; pipeline/task1.sh does not run it.
+# sg1_official.py imports it for cap_gate, dump and the j1_pilot module (J).
+# SG1: the J1 density update kept only where the parent (CAP) speed is below
+# 85 % of free-flow speed, i.e. on cells where traffic runs below free-flow.
+# `feb` compares C0 (CAP), C1 (J1 everywhere) and SG1 on the February 2031
+# held-out days and writes feb_results.json, feb_fold_days.parquet,
+# feb_full_days.parquet and feb_perpanel.csv next to this file.
+# Usage: sg1.py feb
 import os
+# Caps the BLAS/OpenMP thread pools at 2 before numpy loads.
 for k in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','VECLIB_MAXIMUM_THREADS'):os.environ[k]='2'
 import sys,json,time,gc,resource,hashlib
 sys.dont_write_bytecode=True
@@ -8,16 +17,33 @@ import numpy as np,pandas as pd
 HERE=Path(__file__).resolve().parent;BASE=HERE.parent;sys.path.insert(0,str(BASE));import j1_pilot as J
 fb=J.fb;D=J.D
 def cap_gate(v,vf):
+    """Returns the SG1 gate: parent speed < 0.85 x free-flow speed.
+
+    Args:
+      v: Parent speed (km/h), already rounded to 3 decimals.
+      vf: Free-flow speed (km/h); the product is formed in float32.
+
+    Returns:
+      Boolean array, True where the J1 update is kept.
+
+    Raises:
+      AssertionError: When `v` is not rounded to 3 decimals or `vf` is not
+        finite and positive.
+    """
     v=np.asarray(v,dtype=np.float64);assert np.array_equal(v,np.round(v,3)), 'CAP gate parent must be round3'
     vf=np.asarray(vf,dtype=np.float32);assert np.isfinite(vf).all() and (vf>0).all()
     return v<.85*vf
+# Writes `obj` as indented JSON next to this file (NaN not allowed).
 def dump(name,obj):(HERE/name).write_text(json.dumps(obj,indent=2,allow_nan=False))
 def summarize(a):
+    """Returns fb.summarize's score levels per candidate and the per-panel table."""
     m,p,_=fb.summarize(a);return m,p
 def comparisons(a):
+    """Returns the score levels and the SG1 - C1 and SG1 - C0 changes, plus the per-panel table."""
     m,p=summarize(a)
     return dict(levels=m.to_dict('index'),SG1_minus_C1=(m.loc['SG1']-m.loc['C1']).to_dict(),SG1_minus_C0=(m.loc['SG1']-m.loc['C0']).to_dict()),p
 def bootstrap(a,n=1000):
+    """Returns 95 % day-bootstrap intervals of SG1 - C1 and SG1 - C0 (draws that miss a panel/regime are skipped)."""
     dates=sorted(a.date.unique());rng=np.random.default_rng(300930);values=[];missing=0
     for _ in range(n):
         counts=pd.Series(rng.choice(dates,len(dates),replace=True)).value_counts();x=a.copy();cols=x.select_dtypes('number').columns;x[cols]=x[cols].mul(x.date.map(counts).fillna(0),axis=0)
@@ -26,6 +52,11 @@ def bootstrap(a,n=1000):
     return dict(requested=n,valid=len(values),missing_regime=missing,conditional_on_all_regimes=True,
         ci95={b:{c:np.percentile([v[b][c]for v in values],[2.5,97.5]).tolist()for c in values[0][b].index}for b in ['C1','C0']})
 def feb():
+    """Runs the February 2031 check of the SG1 gate and writes feb_results.json.
+
+    pass_feb requires SG1 - C1 total_B > 0 in both folds and a positive lower
+    bound of its bootstrap interval.
+    """
     start=time.time();assert not (HERE/'feb_results.json').exists()
     assert (HERE/'PREREGISTRATION.md').exists();ref=json.loads((BASE/'feb_results.json').read_text())
     meta=pd.read_parquet(BASE/'meta.parquet',columns=['panel_i','day','li','ci','lanes','date','odd']);parents=np.load(BASE/'parents.npz')

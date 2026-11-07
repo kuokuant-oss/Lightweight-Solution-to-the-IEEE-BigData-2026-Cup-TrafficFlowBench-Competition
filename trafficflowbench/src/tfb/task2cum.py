@@ -57,6 +57,13 @@ from __future__ import annotations
 
 import numpy as np
 
+# Role: task2feat.build_window_features calls these blocks when its matching
+# flag is set. The reproduction pipeline serves with dispersion=True, so
+# `dispersion` runs there; `time_oblique` and `link_accumulation` are research
+# blocks. Arrays are (n_links x n_stamps), links in milepost order, and every
+# function reads only the history columns hist_slice = (hs, he), the 12
+# stamps T-60..T-5 before the forecast time T.
+
 
 def _rate(C: np.ndarray, n: int) -> np.ndarray:
     """Background rate per step: the window's own mean, one value per link."""
@@ -72,6 +79,10 @@ def time_oblique(Q_: np.ndarray, hist_slice: tuple[int, int]) -> dict[str, np.nd
     is the SHAPE: a link whose flow sagged mid-window dips negative, one that
     surged bulges positive. That is the amplification the source is after.
     """
+    # Missing flows count as 0 veh/h in the cumulative count. Returns per-link
+    # arrays: minimum, maximum and range of the oblique curve, position of its
+    # minimum as a fraction of the window, last-step slope, sharpest one-step
+    # slope drop and its position, and the change over the last three steps.
     hs, he = hist_slice
     q = np.nan_to_num(Q_[:, hs:he], nan=0.0)
     n = q.shape[1]
@@ -107,6 +118,12 @@ def link_accumulation(Q_: np.ndarray, hist_slice: tuple[int, int],
     it is the one link where this feature carries no information, and the model
     sees milepost alongside it.
     """
+    # `sgn` = -1 makes the high-milepost end upstream. Missing flows count as
+    # 0. The accumulation is a running sum of per-step flow differences in
+    # veh/h, not converted to vehicles. Returns per-link arrays: value at the
+    # end, maximum and minimum over the window, last-step net inflow, change
+    # over the last three steps, share of steps with positive net inflow, and
+    # position of the maximum as a fraction of the window.
     hs, he = hist_slice
     q = np.nan_to_num(Q_[:, hs:he], nan=0.0)
     n = q.shape[1]
@@ -131,6 +148,7 @@ def link_accumulation(Q_: np.ndarray, hist_slice: tuple[int, int],
     }
 
 
+# Column names returned by each block, in output order.
 COLUMNS_TIME_OBLIQUE = ("tob_min", "tob_max", "tob_range", "tob_argmin_frac",
                         "tob_slope_last", "tob_slope_drop", "tob_slope_drop_frac",
                         "tob_last3")
@@ -190,6 +208,10 @@ def dispersion(V: np.ndarray, O_: np.ndarray, Q_: np.ndarray,
     module free of a task2feat cycle; links are milepost-ascending, so +1 is the
     upstream neighbour, matching task2feat.ramp_vectors' convention.
     """
+    # V, O_, Q_: speed, occupancy and flow arrays. Returns per-link standard
+    # deviation and coefficient of variation of speed and occupancy, the
+    # coefficient of variation of flow, and the neighbour pairings below; a
+    # neighbour beyond either end of the chain reads 0.
     hs, he = hist_slice
     v, o, q = V[:, hs:he], O_[:, hs:he], Q_[:, hs:he]
     sd_v, cv_v = _cv(v)
@@ -197,11 +219,13 @@ def dispersion(V: np.ndarray, O_: np.ndarray, Q_: np.ndarray,
     _, cv_q = _cv(q)
 
     def _lo(a):                      # value from the lower-milepost neighbour
+        """Returns ``a`` shifted one link: row i holds row i-1, row 0 is 0."""
         out = np.zeros_like(a)
         out[1:] = a[:-1]
         return out
 
     def _hi(a):                      # value from the higher-milepost neighbour
+        """Returns ``a`` shifted one link: row i holds row i+1, last row is 0."""
         out = np.zeros_like(a)
         out[:-1] = a[1:]
         return out

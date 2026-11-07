@@ -39,6 +39,9 @@ import pandas as pd
 
 from . import release as R, score2, task2build as TB
 
+# Role: task2feat.build_window_features adds these aggregates only when given
+# `spatial_w`; the reproduction pipeline does not pass it, so this is a
+# research block. EPS guards divisions by near-zero sums.
 EPS = 1e-9
 
 
@@ -48,6 +51,10 @@ def panel_weights(panel: str, source_dates: set[str]) -> tuple[np.ndarray, np.nd
     Returns (W_up, W_dn), each (n_links x n_links); row i holds the weights link
     i gives its upstream (lower milepost) or downstream neighbours, self excluded.
     """
+    # Reads train-split truth days in `source_dates` only. Missing speeds are
+    # filled with the link's own mean for that day, and the correlations pool
+    # every stamp of every source day.
+    # Raises RuntimeError when no source day matches.
     cut = score2.v_cut(panel)
     from .task2pool import date_of
     S = sx = sxx = None
@@ -83,9 +90,12 @@ def panel_weights(panel: str, source_dates: set[str]) -> tuple[np.ndarray, np.nd
         corr = np.where(denom > EPS, cov / np.maximum(denom, EPS), 0.0)
     np.fill_diagonal(corr, 0.0)
     w = np.clip(np.nan_to_num(corr), 0.0, None)
+    # Up and down follow milepost order (higher milepost = downstream);
+    # task2dir's sign is not applied here.
     upper = mp[None, :] > mp[:, None]          # column j is downstream of row i
     lower = mp[None, :] < mp[:, None]
     def norm(m):
+        """Keeps one side of the weights and normalises each row to sum 1."""
         x = w * m
         return x / np.maximum(x.sum(axis=1, keepdims=True), EPS)
     return norm(lower), norm(upper)
@@ -94,6 +104,9 @@ def panel_weights(panel: str, source_dates: set[str]) -> tuple[np.ndarray, np.nd
 def aggregate(w_up: np.ndarray, w_dn: np.ndarray, margin_last: np.ndarray,
               trend: np.ndarray, queued: np.ndarray) -> dict[str, np.ndarray]:
     """Spatial aggregates under the data-derived weights."""
+    # w_up, w_dn: (n_links x n_links) weights from panel_weights. margin_last,
+    # trend, queued: per-link margin, 3-step speed trend and queued flag at
+    # the last history stamp. Returns the nine FEATURES arrays.
     out = {
         "sa_margin_up": w_up @ margin_last,
         "sa_margin_dn": w_dn @ margin_last,
@@ -118,6 +131,11 @@ FEATURES = ["sa_margin_up", "sa_margin_dn", "sa_trend_up", "sa_trend_dn",
 
 
 def weights_for(panels: list[str], source_dates: set[str]):
+    """Returns per-panel (W_up, W_dn) weights and a diagnostics table.
+
+    The table lists, per panel, the link count and the median number of
+    non-zero and of effective (1 / sum of squared weights) neighbours.
+    """
     out, diag = {}, []
     for p in panels:
         wu, wd = panel_weights(p, source_dates)

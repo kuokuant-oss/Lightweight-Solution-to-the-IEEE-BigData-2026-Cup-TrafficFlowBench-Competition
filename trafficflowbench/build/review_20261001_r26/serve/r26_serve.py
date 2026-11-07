@@ -11,12 +11,28 @@ previous official origin + 360 min were never considered. LE (PREREG_R26.md, sel
   r26_serve.py decide      # candidate C1f-BND vs same-operator C1f; delta onto R21a bits
   r26_serve.py patch OUT   # stream R21a, replace only ongoing rows, verify, manifest
 """
+# Runs in pipeline/ongoing.sh as `r26_serve.py prob` (bnd_prob) and
+# `r26_serve.py decide` (bnd_decide). BND: the selection-screen inputs
+# (prev_rej, n_rej) of the parent selrec / geomselrec models are corrected
+# with the published window index. Official windows of a panel and split lie
+# at least 360 minutes apart, so slots before the previous official origin
+# + 360 min were never screened. k_known uses only the window's own origin T,
+# the previous official origin and the scan start (first date + 60 min); all
+# are at or before T. PB: parent probabilities with the corrected inputs.
+# R26a = where(BND != C1f, BND, R21a).
+# Outputs: prob/<split>_PB_prob.npz, official_k_<split>.parquet,
+# official_k.json, decisions_BND_<split>.npz, transport_BND_<split>.parquet
+# and decide_BND.json.
 import os, sys
+# Caps the BLAS/OpenMP thread pools at 2 before numpy and the models load.
 for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"): os.environ[k] = "2"
 sys.dont_write_bytecode = True
 from pathlib import Path
 import json, glob
 import numpy as np, pandas as pd
+# Original absolute roots; bin/tfb-run maps them onto the run tree. S: the
+# r22_serve module. TAB: training table of the mean true n_rej per
+# (k_known, served n_rej).
 ROOT = Path("/Volumes/Crucial X9/trafficflow/trafficflowbench"); HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "build/review_20261001_r22/serve")); import r22_serve as S  # noqa: E402
 sys.path.insert(0, str(S.Q)); from inference_common import parent_paths  # noqa: E402
@@ -27,12 +43,28 @@ DATA = Path("/Volumes/Crucial X9/trafficflow/tfb_competition_data/kaggle_public"
 
 
 def le(k, n):
+    """Returns the corrected n_rej of a window.
+
+    Args:
+      k: k_known, the number of slots before T (0..12) that the screen could
+        have checked.
+      n: Served n_rej (shape-rule value).
+
+    Returns:
+      n when n <= k; 0 when k == 0; otherwise the rounded TAB value of (k, n).
+    """
     if n <= k: return n
     if k == 0: return 0
     return int(round(TAB[(k, n)]))
 
 
 def official_k():
+    """Returns the official queue_ongoing windows with k_known and the gap to the previous official origin.
+
+    The screen of a window reaches back to max(scan start, previous official
+    origin + 360 min); scan start = first date of the panel and split + 60
+    min. `gap` is in minutes.
+    """
     rows = []
     for split in SPLITS:
         for f in sorted(glob.glob(str(DATA / f"task2/*/{split}/window_index.csv"))): rows.append(pd.read_csv(f))
@@ -47,6 +79,7 @@ def official_k():
 
 
 def prob():
+    """Writes the PB probabilities: parent selrec / geomselrec re-predicted on the windows whose n_rej changes (A unchanged)."""
     import lightgbm as lgb
     w = official_k(); info = {}
     for split in SPLITS:
@@ -78,6 +111,13 @@ def prob():
 
 
 def decide(tag="BND"):
+    """Decides BND against the same-operator C1f and writes the delta onto the R21a bits.
+
+    BND uses PB in the parent slots; M1sf, M1f and A25 stay unchanged.
+
+    Args:
+      tag: Output name.
+    """
     bits = S.r21a_bits(); res = {}
     for split in SPLITS:
         ri = pd.read_parquet(SS / f"{split}_ROW_INDEX.parquet"); mp = pd.read_parquet(SS / f"{split}_SUBMISSION_MAP.parquet")

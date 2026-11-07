@@ -9,7 +9,12 @@
 Reference = the R21a recipe C1f (sel (P+M1sf)/2, geom (P+M1f)/2, A25) under the same R20 operator (strict Jan31 blocks,
 block mean >= .5, A25 never-empty guard). Delta patch: R21a bits, changed only where candidate != same-operator C1f.
 """
+# pipeline/ongoing.sh does not run this file; r26_serve.py and r26_serve_t45.py
+# import it for the serving folders, `base_of`, `pooled`, `decision`,
+# `r21a_bits` and `patch`. The other model kinds of `prob` and `decide` are
+# the R22 research record (models under ../ic, ../n6mono and ../amono).
 import os, sys
+# Caps the BLAS/OpenMP thread pools at 2 before numpy and the models load.
 for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
     os.environ[k] = "2"
 sys.dont_write_bytecode = True
@@ -17,6 +22,9 @@ from pathlib import Path
 import json, argparse, hashlib, itertools, time
 import numpy as np, pandas as pd
 
+# Original absolute root; bin/tfb-run maps it onto the run tree. R21A: the
+# R21a submission CSV, read when R21a_ongoing_bits.npz is missing and by
+# `patch`.
 ROOT = Path("/Volumes/Crucial X9/trafficflow/trafficflowbench")
 R20 = ROOT / "build/review_20260930_round20"; Q = R20 / "queue_data"; SS = Q / "serving_stage"
 R21S = ROOT / "build/review_20261001_fresh/serve"
@@ -29,6 +37,7 @@ SPLITS = ("validation", "private")
 
 
 def sha(p):
+    """Returns the SHA256 hex digest of file `p`."""
     h = hashlib.sha256()
     with open(p, "rb") as f:
         for b in iter(lambda: f.read(8 << 20), b""): h.update(b)
@@ -36,12 +45,18 @@ def sha(p):
 
 
 def base_of(split):
+    """Returns the 98 base features (memory-mapped) and the row index of one split."""
     b = np.load(SS / f"{split}_base98.npy", mmap_mode="r"); ri = pd.read_parquet(SS / f"{split}_ROW_INDEX.parquet")
     assert len(b) == len(ri) == 43500
     return b, ri
 
 
 def prob(kind):
+    """Writes per-seed probabilities of one R22 model kind for both splits (prob/<split>_<kind>_prob.npz).
+
+    Raises:
+      SystemExit: For an unknown kind.
+    """
     import lightgbm as lgb
     for split in SPLITS:
         out = PROB / f"{split}_{kind}_prob.npz"
@@ -81,6 +96,14 @@ def prob(kind):
 
 
 def slot(split, expr, which):
+    """Returns the per-seed probabilities of one slot, averaged over the kinds in `expr`.
+
+    Args:
+      split: 'validation' or 'private'.
+      expr: '+'-separated kinds; 'P' and 'A25' are the parent probabilities
+        of the slot.
+      which: Slot, 'sel', 'geom' or 'a'.
+    """
     par = np.load(R21S / "prob" / f"{split}_parent_prob.npz")
     own = {"sel": par["selrec_seed_prob"], "geom": par["geom_seed_prob"], "a": par["a25_seed_prob"]}[which]
     parts = []
@@ -99,10 +122,18 @@ def slot(split, expr, which):
 
 
 def pooled(ri, p):
+    """Returns, for every row, the mean of `p` over its (window, step, link group)."""
     return pd.Series(np.asarray(p, np.float64)).groupby([ri.window_id.to_numpy(), ri.step.to_numpy(), ri.bid.to_numpy()]).transform("mean").to_numpy()
 
 
 def decision(ri, sel, geom, a):
+    """Returns the R20-operator queue decision.
+
+    N = mean of the 3 sel and 3 geom seed columns; link probability =
+    .75 N + .25 x mean of `a`. A cell is queued when its link-group mean at
+    the same step is >= .5; a window with no queued cell takes the same
+    decode of the A probability alone.
+    """
     pA = a.mean(1); n = sum([sel[:, i] for i in range(3)] + [geom[:, i] for i in range(3)])
     d = pooled(ri, .75 * (n / 6) + .25 * pA) >= .5
     empty = pd.Series(d).groupby(ri.window_id.to_numpy()).transform("sum").to_numpy() == 0
@@ -110,6 +141,12 @@ def decision(ri, sel, geom, a):
 
 
 def r21a_bits():
+    """Returns the R21a ongoing bits per split in SUBMISSION_MAP order.
+
+    Loads R21a_ongoing_bits.npz (written by make_r21a_bits.py in the package
+    run); otherwise reads the R21a CSV, checks it against the C1f delta and
+    saves that file.
+    """
     path = HERE / "R21a_ongoing_bits.npz"
     if path.exists():
         z = np.load(path); return {s: z[s] for s in SPLITS}
@@ -129,6 +166,14 @@ def r21a_bits():
 
 
 def decide(tag, sel_e, geom_e, a_e):
+    """Decides a candidate against the same-operator C1f and writes the delta onto the R21a bits.
+
+    Args:
+      tag: Output name.
+      sel_e: Slot expression of the selrec slot (see `slot`).
+      geom_e: Slot expression of the geomselrec slot.
+      a_e: Slot expression of the A slot.
+    """
     bits = r21a_bits(); res = {}
     for split in SPLITS:
         ri = pd.read_parquet(SS / f"{split}_ROW_INDEX.parquet"); mp = pd.read_parquet(SS / f"{split}_SUBMISSION_MAP.parquet")
@@ -153,6 +198,15 @@ def decide(tag, sel_e, geom_e, a_e):
 
 
 def patch(tag, out_name):
+    """Writes a candidate CSV: the R21a CSV with the ongoing queue_pred values of decisions_<tag> applied.
+
+    Checks that every other field and row stays byte-identical and writes a
+    manifest next to the CSV.
+
+    Args:
+      tag: Decisions to apply.
+      out_name: File name under candidates/.
+    """
     assert sha(R21A) == R21A_SHA
     upd = {}
     for split in SPLITS:

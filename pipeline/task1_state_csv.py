@@ -16,15 +16,29 @@ Why: Task 1 programs of the chain read their parent's STATE values from the pare
 placeholders (0.0 / 0) to keep the original row count and order (some builders stream the parent CSV
 and assert 6,980,503 rows). Every state row must be covered by the layers.
 """
+# Reproduction pipeline: called by the csv() function of pipeline/task1.sh (steps 2, 3, 5, 7, 8, 10).
 import argparse, glob
 from pathlib import Path
 import numpy as np, pandas as pd
 
 HEADER = "submission_id,task,speed_kmh,flow_vph,queue_pred,path_flow\n"
+# Number-format code stored per id and column (0 = not covered yet).
 CODES = {"np3": 1, "fmt3": 2, "fmt6": 3}
 
 
 def text(x, code):
+    """Formats one value the way the builder of its layer wrote it.
+
+    Args:
+        x: speed (km/h) or flow (veh/h).
+        code: 1 = numpy round to 3 decimals, then '.3f'; 2 = '.3f'; 3 = '.6f' (see CODES).
+
+    Returns:
+        The number text for the CSV.
+
+    Raises:
+        ValueError: unknown code.
+    """
     if code == 1:
         return format(float(np.round(x, 3)), ".3f")
     if code == 2:
@@ -35,6 +49,11 @@ def text(x, code):
 
 
 def main():
+    """Writes the state-only stand-in CSV described in the module docstring.
+
+    Raises:
+        SystemExit: the output file already exists.
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True)
     ap.add_argument("--out", required=True)
@@ -46,6 +65,8 @@ def main():
     key = pd.read_csv(Path(a.data) / "submission_key.csv", usecols=["submission_id", "task"])
     sid = key.submission_id.to_numpy(np.int64); task = key.task.to_numpy()
     n = int(sid.max()) + 1
+    # Arrays indexed by submission_id: values (v speed, q flow) and the format code of the layer
+    # that set each one.
     v = np.full(n, np.nan); q = np.full(n, np.nan)
     mv = np.zeros(n, np.int8); mq = np.zeros(n, np.int8)
     for spec in a.layer:
@@ -60,6 +81,7 @@ def main():
             d = d[d[mask].to_numpy(bool)]
         ii = d.submission_id.to_numpy(np.int64)
         assert len(np.unique(ii)) == len(ii), f"{path}: duplicate ids"
+        # np.searchsorted assumes submission_key lists ids in ascending order.
         assert (task[np.searchsorted(sid, ii)] == "state").all(), f"{path}: non-state ids"
         code = CODES[meth]
         if scol != "-":
@@ -70,6 +92,7 @@ def main():
     st = sid[task == "state"]
     miss = int(((mv[st] == 0) | (mq[st] == 0)).sum())
     assert miss == 0, f"{miss} state rows not covered"
+    # Rows in submission_key order; queue and odme rows are placeholders.
     with open(out, "x") as f:
         f.write(HEADER)
         for s, t in zip(sid.tolist(), task.tolist()):

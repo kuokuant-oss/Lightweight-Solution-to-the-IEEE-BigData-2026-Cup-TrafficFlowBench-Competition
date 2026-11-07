@@ -1,5 +1,9 @@
 """Per (event/window, candidate site) features at origin T, for train events and pseudo-val onset windows.
 Site bottleneck links (bn) = links hitting q/c~1 at breakdown (from bneck.py)."""
+#
+# Role: `BN` is imported by serve_official.py and uncond.py (reproduction pipeline, onset.sh step 2, through
+# pipeline/onset_c3.py). The __main__ block is the record of the site tables site_train.parquet and
+# site_pv.parquet. Features use the flow / capacity ratio of a site's bottleneck links (bn ratio).
 import sys, numpy as np, pandas as pd, warnings
 from pathlib import Path
 warnings.filterwarnings('ignore')
@@ -8,6 +12,8 @@ REL = Path('/Volumes/Crucial X9/trafficflow/tfb_competition_data/kaggle_public')
 FV = Path(__file__).resolve().parent.parent / 'fakeval'
 sys.path.insert(0, str(HERE))
 from pv_sites import SITES, site_of
+# BN: per corridor and site, the bottleneck link indices (milepost order) whose flow / capacity ratio feeds the
+# site features.
 BN = {
     'D12_I5_N': {'S1': [106, 108, 109], 'S2': [241], 'S3': [15]},
     'D12_I5_S': {'S1': [42], 'S2': [11], 'S3': [92], 'S4': [40]},
@@ -22,6 +28,11 @@ BN = {
 
 def feats(Qd, Vd, Od, cap, vf, T, panel):
     """Qd,Vd: [L, 288] one day. returns dict site->features"""
+    # Args: Qd, Vd, Od flow (veh/h), speed (km/h), occupancy of one day (links x 288 steps; Od may be None),
+    # cap capacity (veh/h) and vf free-flow speed (km/h) per link, T origin step.
+    # Per site: bn ratio at T (rT), means over the last 2/3/6/12 steps up to T (rT1, r3, r6, r12), the 6 steps
+    # before that (r6p), its rise dr = r6 - r6p, the 3-step max (rmx3), and in the site region +-1 link the
+    # lowest speed ratio (vmin), the speed-ratio spread over 12 steps (vsd) and the highest occupancy (occ).
     out = {}
     for s, bl in BN[panel].items():
         lo, hi = SITES[panel][s]
@@ -44,6 +55,7 @@ def feats(Qd, Vd, Od, cap, vf, T, panel):
 
 
 def train_rows():
+    """Builds the site rows of the train onset events: features at T = onset step - 6, y = site queued."""
     ev = pd.read_parquet(HERE / 'events_train.parquet')
     rows = []
     for panel in SITES:
@@ -67,6 +79,7 @@ def train_rows():
 
 
 def pv_rows():
+    """Builds the site rows of the March pseudo-val onset windows from the filled day caches (data after T blanked)."""
     w = pd.read_parquet(FV / 'windows_validation.parquet'); w = w[w.condition == 'queue_onset']
     ps = pd.read_parquet(HERE / 'pv_sites.parquet').set_index('window_id')
     rows = []

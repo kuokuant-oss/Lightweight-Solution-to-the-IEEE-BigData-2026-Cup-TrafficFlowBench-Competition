@@ -29,10 +29,31 @@ def link_order(panel: str) -> pd.DataFrame:
 
 
 class DayGrid:
+    """One panel-day as (link x 5-minute timestamp) arrays, links in milepost order.
+
+    Attributes:
+        panel: panel ID.
+        date: the day, 'YYYY-MM-DD'.
+        links: link IDs in row order (milepost order).
+        times: the day's sorted timestamps (column order).
+        milepost: milepost of each link.
+        value: field -> (n_links, n_times) float array from the masked layer
+            (NaN where blanked or not reported); fields speed_kmh, flow_vph,
+            occupancy.
+        truth: the same layout from the unmasked layer; all NaN when the grid
+            comes from build_masked().
+        eligible: bool array, cells the official scorer counts
+            (is_score_eligible).
+        blanked: bool array, cells whose speed and flow are both missing in the
+            masked layer.
+        station: station ID of each link.
+        pct: pct_observed of each cell (0 where the cell has no row).
+    """
     __slots__ = ("panel", "date", "links", "times", "milepost", "value", "truth",
                  "eligible", "blanked", "station", "pct")
 
     def __init__(self, panel, date, links, times, milepost, value, truth, eligible, blanked, station, pct):
+        """Stores the arrays described in the class docstring."""
         self.panel, self.date = panel, date
         self.links, self.times, self.milepost = links, times, milepost
         self.value, self.truth = value, truth
@@ -45,6 +66,17 @@ class DayGrid:
 
 
 def build(panel: str, truth_path: Path, masked_path: Path) -> DayGrid:
+    """Builds a DayGrid for one train day from its unmasked and masked files.
+
+    Args:
+        panel: panel ID.
+        truth_path: the day's `mainline_states` file (only train ships it).
+        masked_path: the same day's `mainline_states_masked` file.
+
+    Returns:
+        DayGrid whose `value` holds the masked layer and `truth` the unmasked
+        layer; eligibility and pct_observed come from the unmasked file.
+    """
     truth = pd.read_parquet(truth_path, columns=["date", "timestamp", "station_id", "link_id", "milepost",
                                                  "speed_kmh", "flow_vph", "occupancy",
                                                  "pct_observed", "is_score_eligible"])
@@ -65,6 +97,7 @@ def build(panel: str, truth_path: Path, masked_path: Path) -> DayGrid:
     station[r] = truth.station_id.to_numpy()
 
     def lay(frame, col, idx_r, idx_c, fill=np.nan):
+        """Scatters one column of `frame` into an (n_links, n_times) array, `fill` elsewhere."""
         g = np.full((nL, nT), fill, dtype=float)
         g[idx_r, idx_c] = pd.to_numeric(frame[col], errors="coerce").to_numpy(dtype=float)
         return g
@@ -77,6 +110,7 @@ def build(panel: str, truth_path: Path, masked_path: Path) -> DayGrid:
     mr = masked.link_id.map(li).to_numpy()
     mc = masked.timestamp.map(ti).to_numpy()
     mvals = {c_: lay(masked, c_, mr, mc) for c_ in VALUE_COLS}
+    # A cell counts as blanked when the release removed both speed and flow.
     blanked = np.isnan(mvals["speed_kmh"]) & np.isnan(mvals["flow_vph"])
 
     return DayGrid(panel, str(truth.date.iloc[0]), list(order.link_id), times,
@@ -107,6 +141,7 @@ def build_masked(panel: str, masked_path: Path) -> DayGrid:
     station[r] = m.station_id.to_numpy()
 
     def lay(col, fill=np.nan):
+        """Scatters column `col` of the masked file into an (n_links, n_times) array, `fill` elsewhere."""
         g = np.full((nL, nT), fill, dtype=float)
         g[r, c] = pd.to_numeric(m[col], errors="coerce").to_numpy(dtype=float)
         return g

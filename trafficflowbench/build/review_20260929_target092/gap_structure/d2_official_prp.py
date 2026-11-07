@@ -4,6 +4,15 @@ per-split transductive, same recipe as the strict G2 test: March -20.0% / April 
 Official rows: rebuild HMP50 on the full eligible official gap grid (official HM heads, released-topology groups, T1),
 assert keyed parity with the shipped HMP50 speeds, then
   v = 0.5*T1 + 0.5*clip(g2 + (1-pPRpool)*rf + pPRpool*rq) + 0.5*corr_Jan   (clip 6..120.75), flow unchanged."""
+# Runs in pipeline/task1.sh step 9 ("d2_official_prp"); the package helper
+# pipeline/make_state_updates_gap_prp.py turns its output into the keyed
+# PRP_plus layer. PR head: queue-probability LightGBM with ramp features, fit
+# on all pseudo holes of the split (g2_<split>_feats.parquet). PRP: the HMP50
+# mixture with the cluster-pooled PR probability. "_plus": + 0.5 x the
+# January residual (b3_sp_M2_janfit.txt).
+# Outputs: d2_official_updates_prp.parquet (submission_id, new_speed_prp,
+# HMP50 speed, probabilities, correction and champion columns) and
+# d2_official_report.json.
 import os, sys, json, gc
 os.environ.setdefault('OMP_NUM_THREADS', '2')
 from pathlib import Path
@@ -12,6 +21,8 @@ HERE = Path(__file__).resolve().parent; sys.path.insert(0, str(HERE))
 import ramp_feats as RF
 from b2_ramp_resid import SP, FLOOR, CAP
 from g2_persplit import PARB, NR
+# Original absolute root; bin/tfb-run maps it onto the run tree. HM: HM25
+# heads; RSV: HMP50 serving rows and cluster topology.
 ROOT = Path('/Volumes/Crucial X9/trafficflow/trafficflowbench')
 R3 = ROOT / 'build/review_20260925/round3/task1_trans_serving'
 sys.path.insert(0, str(R3)); import serve_lib as S
@@ -21,6 +32,12 @@ FMAP = {'p_v': 'ch_v', 'p_ql': 'ch_ql'}
 
 
 def main():
+    """Fits the per-split PR heads and writes the PRP_plus gap speeds of the official holes.
+
+    Raises:
+      AssertionError: When a link has no cluster or the HMP50 rebuild differs
+        by 1e-6 or more.
+    """
     feats = SP + RF.RAMP_FEATS + RF.NEAR_FEATS + ['pool50', 'pp']
     corr_m = lgb.Booster(model_file=str(HERE / 'b3_sp_M2_janfit.txt')); cf = corr_m.feature_name()
     hist = pd.read_parquet(HM / 'official_state_updates.parquet')[['submission_id', 'parent_speed']].rename(columns={'parent_speed': 't1_speed'})
@@ -45,6 +62,8 @@ def main():
         d['pp'] = d.groupby(gk).p.transform('mean')
         fs = lgb.Booster(model_file=str(R3 / 'work' / f'fs_speed_{split}.txt'))
         d['t1'] = np.clip(d.ch_v + fs.predict(d[S.FEATS], num_threads=2), S.SPEED_FLOOR, S.SPEED_CAP)
+        # Keyed hole rows take the shipped T1 and G2 speeds; the other eligible
+        # gap cells keep the recomputed T1 and the G2v2 value ch_v.
         key = ['panel', 'timestamp', 'link_id']
         g2p = pd.read_parquet(R3 / 'work' / f'parent_{split}_state.parquet', columns=['submission_id'] + key + ['speed_kmh'])
         g2p = g2p[g2p.submission_id.isin(set(hmp.submission_id))].rename(columns={'speed_kmh': 'g2_speed'})

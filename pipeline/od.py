@@ -10,6 +10,7 @@ imports it unchanged and calls only `build_odme()`:
 The CSV is then read back the way the official `merge_submissions.py` loads an odme file and keyed to
 `submission_id` on (panel, departure_time, path_id). Run it through `bin/tfb-run`.
 """
+# Reproduction pipeline: run by pipeline/od.sh (step 5 of run_reproduce.sh).
 import importlib.util
 import os
 import sys
@@ -18,9 +19,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+# Set by bin/tfb-run: the run tree root and its trafficflowbench/ copy.
 RUN = Path(os.environ['TFB_WORKSPACE_ROOT'])
 ROOT = Path(os.environ['TFB_REPO_ROOT'])
 sys.path.insert(0, str(ROOT))
+# Load scripts/60_build_submission.py unchanged as module `build60` (B). Loading runs its imports
+# and its research-gate call (off unless TFB_RESEARCH_GATE=on), not its main(). B.R is its
+# release-path module; B.R.RELEASE is the released data folder inside the run tree.
 _spec = importlib.util.spec_from_file_location('build60', ROOT / 'scripts/60_build_submission.py')
 B = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(B)
@@ -30,6 +35,13 @@ DEST = RUN / 'final_sources' / 'odme.parquet'
 
 
 def main():
+    """Runs build_odme() into <run>/work/od/ and writes final_sources/odme.parquet.
+
+    The output holds submission_id (int64) and path_flow (float64), sorted by submission_id.
+
+    Raises:
+        SystemExit: the output parquet or the intermediate CSV already exists.
+    """
     if DEST.exists():
         raise SystemExit(f'refusing to overwrite {DEST}')
     B.OUT = RUN / 'work' / 'od'
@@ -44,6 +56,8 @@ def main():
         d[c] = d[c].astype(str)
     d['path_flow'] = pd.to_numeric(d.path_flow, errors='coerce')
     assert not d.duplicated(KEYS).any()
+    # Key each (panel, departure_time, path_id) to its submission_id; every odme row of the key
+    # must receive a finite, non-negative flow.
     key = pd.read_csv(B.R.RELEASE / 'submission_key.csv', usecols=['submission_id', 'task'] + KEYS, dtype=str)
     key = key[key.task.eq('odme')]
     m = key.merge(d, on=KEYS, how='left', validate='one_to_one')

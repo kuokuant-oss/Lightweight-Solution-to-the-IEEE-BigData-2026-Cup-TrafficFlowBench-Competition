@@ -1,10 +1,17 @@
 """Per pseudo-val onset window: true site vs production predicted site, IoU."""
+#
+# SITES and site_of are imported by the onset site code (serve_official.py, site_feats.py, uncond.py,
+# eval_template.py, oracle_site.py) and by round2/onset_joint/common.py; in the reproduction pipeline they
+# load through pipeline/onset_c3.py (onset.sh step 2). The __main__ block is the record of the March
+# pseudo-val site table (pv_sites.parquet); it reads ../fakeval/pv_prod.parquet and cache/<panel>_validation.npz.
 import sys, numpy as np, pandas as pd
 from pathlib import Path
 HERE = Path(__file__).resolve().parent
 FV = Path(__file__).resolve().parent.parent / 'fakeval'
 sys.path.insert(0, str(FV))
 import score as S
+# Candidate onset sites per corridor: site name -> (lo, hi) link-index range of its queued region, with
+# links in milepost order (index grows downstream).
 SITES = {  # queued region [lo, hi] in milepost-order link index; bottleneck links
     'D12_I5_N': {'S1': (103, 105), 'S2': (236, 238), 'S3': (8, 14)},
     'D12_I5_S': {'S1': (43, 45), 'S2': (10, 15), 'S3': (89, 89), 'S4': (39, 41)},
@@ -18,6 +25,16 @@ SITES = {  # queued region [lo, hi] in milepost-order link index; bottleneck lin
 
 
 def site_of(panel, idx, tol=2):
+    """Returns the site whose region contains or lies nearest to link index idx.
+
+    Args:
+        panel: corridor name (a key of SITES).
+        idx: link index in milepost order.
+        tol: largest distance in links still assigned to a site.
+
+    Returns:
+        Site name such as 'S1', or 'X' when no site region is within tol links.
+    """
     best = 'X'; bd = 1e9
     for s, (lo, hi) in SITES[panel].items():
         d = 0 if lo <= idx <= hi else min(abs(idx - lo), abs(idx - hi))
@@ -26,6 +43,8 @@ def site_of(panel, idx, tol=2):
 
 
 if __name__ == '__main__':
+    # Per pseudo-val onset window: sites of the clean labels at T+30 (step 6) vs sites of the production
+    # prediction, the window IoU and the highest production probability per site.
     lab, w = S.labels('validation')
     pred = pd.read_parquet(FV / 'pv_prod.parquet'); pred = pred[pred.condition == 'queue_onset']
     wo = w[w.condition == 'queue_onset']

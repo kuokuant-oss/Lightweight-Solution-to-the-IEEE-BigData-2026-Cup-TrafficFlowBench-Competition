@@ -1,4 +1,14 @@
 """Serving-path features (exact production code) for a root/split; saves ongoing(all steps) + onset(all steps)."""
+# Role: runs in the reproduction (`pipeline/ongoing.sh`, steps nw_feats_val and
+# nw_feats_pri). It writes serve_<tag>.parquet into the working directory; the
+# pipeline moves the file into this folder, where ogens_serve.py reads it.
+# One row per (official Task 2 window, link, step) for both conditions, with
+# the Task 2 serving features of src/tfb/task2infer.py (history up to T, ramp
+# and origin observations, queue prior over the train fit dates) plus the
+# link/panel codes and the ramp columns at T and T-5 min of the 0922 ongoing
+# model (scripts/strongest_20260922_ongoing.py, loaded as Q).
+#
+# Usage: build_serve_feats.py <release root> <split> <tag>
 import os
 for n in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','VECLIB_MAXIMUM_THREADS'): os.environ[n]='2'
 import sys, json, importlib.util
@@ -9,12 +19,15 @@ from src.tfb import release as R, score2, task2infer as TI
 root,split,tag=Path(sys.argv[1]),sys.argv[2],sys.argv[3]
 R.RELEASE=root
 spec=importlib.util.spec_from_file_location('Q',ROOT/'scripts/strongest_20260922_ongoing.py'); Q=importlib.util.module_from_spec(spec); spec.loader.exec_module(Q)
+# Train dates of the 0922 ongoing model; the queue prior feature is computed
+# from these days only.
 fitdates=json.loads((ROOT/'build/review_20260923/ongoing_P1/manifest.json').read_text())['fit_dates']
 wi_all=score2.window_index(split); wi_all['date']=pd.to_datetime(wi_all.forecast_origin).dt.strftime('%Y-%m-%d')
 parts=[]
 for panel in sorted(wi_all.panel.unique()):
     s=TI.features_for_split(panel,split,oblique=True,dispersion=True,clock=True,origin_obs=True,prior_dates=tuple(fitdates))
     wi=wi_all[wi_all.panel.eq(panel)]
+    # Window date, link/panel integer codes and the ramp columns at T, T-5 min.
     s['date']=s.window_id.map(wi.set_index('window_id').date); Q.identities(s); Q.net_columns(s,wi,split=split)
     s['timestamp']=pd.to_datetime(s.timestamp,utc=True).dt.strftime('%Y-%m-%dT%H:%M:%SZ')
     parts.append(s); print(panel,len(s),flush=True)

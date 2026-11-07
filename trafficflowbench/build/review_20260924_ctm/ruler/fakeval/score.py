@@ -1,13 +1,31 @@
 """Score queue predictions on pseudo windows.  score(pred_df, split) -> dict, per-window frame."""
+#
+# Ruler for the March pseudo-val windows: scores a queue prediction against the labels written by the pseudo
+# window builder (labels_<split>.parquet, windows_<split>.parquet in this folder) with the official aggregation
+# (window IoU -> panel x condition mean -> family mean -> mean over families). Imported as `score` by the onset
+# site code (ruler/onset_site/pv_sites.py, oracle_site.py, eval_template.py) and by f2_analysis/bias/lib.py. In
+# the reproduction pipeline it is only imported (through pipeline/onset_c3.py); its functions are the ruler.
+#
+# Usage:
+#   score.py validation [pred.parquet ...]          persistence baseline, then one report line per file
+#   score.py eval pred.parquet [perwin_out.parquet] evaluate() summary (+ per-window table)
 import numpy as np, pandas as pd
 from pathlib import Path
 SP = Path(__file__).resolve().parent
+# FAM: corridor -> family (both directions of a freeway form one family).
 FAM = {'D7_I10_E': 'D7_I10', 'D7_I10_W': 'D7_I10', 'D7_I210_E': 'D7_I210', 'D7_I210_W': 'D7_I210', 'D7_I405_N': 'D7_I405',
        'D7_I405_S': 'D7_I405', 'D12_I5_N': 'D12_I5', 'D12_I5_S': 'D12_I5'}
 _LAB = {}
 
 
 def labels(split='validation'):
+    """Returns (labels, windows) of the pseudo split, cached.
+
+    labels: one row per (window_id, timestamp, link_id) of the 6 horizon steps with `label` (observed queue),
+    `mask` (cell is observed, eligible and not filled) and `clean` (queue state from time-interpolated speeds).
+    windows: window_id, panel, condition, regime, date, mult (number of selector start days that pick the
+    window), first (first horizon step with a clean queue).
+    """
     if split not in _LAB:
         lab = pd.read_parquet(SP / f'labels_{split}.parquet')
         w = pd.read_parquet(SP / f'windows_{split}.parquet')[['window_id', 'panel', 'condition', 'regime', 'date', 'mult', 'first']]
@@ -16,6 +34,16 @@ def labels(split='validation'):
 
 
 def agg(fr, col='iou'):
+    """Returns the official aggregation of a per-window column.
+
+    Args:
+        fr: per-window frame with panel, condition and `col`.
+        col: score column, e.g. 'iou' or 'iou_clean'.
+
+    Returns:
+        Dict with one value per condition (panel mean -> family mean -> mean) and 'S_queue' (per panel the
+        mean over its condition means, then family mean, then mean).
+    """
     pc = fr.groupby(['panel', 'condition'])[col].mean().reset_index()
     out = {}
     for cond, g in pc.groupby('condition'):
@@ -25,6 +53,17 @@ def agg(fr, col='iou'):
 
 
 def score(pred, split='validation', windows=None):
+    """Scores a prediction window by window.
+
+    Args:
+        pred: DataFrame(window_id, timestamp, link_id, queue_pred); missing cells count as not queued.
+        split: pseudo split name.
+        windows: optional collection of window ids to keep.
+
+    Returns:
+        Per-window frame: iou (on masked label cells; 1.0 when both prediction and label are empty there),
+        iou_clean (on all cells against the clean labels), n_true, n_pred, plus the window metadata.
+    """
     lab, w = labels(split)
     p = pred[['window_id', 'timestamp', 'link_id', 'queue_pred']]
     m = lab.merge(p, on=['window_id', 'timestamp', 'link_id'], how='left')
@@ -42,12 +81,21 @@ def score(pred, split='validation', windows=None):
 
 
 def report(fr, name=''):
+    """Prints one line with the observed-label and clean-label aggregates and returns both dicts."""
     a = agg(fr, 'iou'); b = agg(fr, 'iou_clean')
     print(f'{name:28s} obs: onset {a.get("queue_onset", np.nan):.4f} ongoing {a.get("queue_ongoing", np.nan):.4f} S {a["S_queue"]:.4f} | clean: onset {b.get("queue_onset", np.nan):.4f} ongoing {b.get("queue_ongoing", np.nan):.4f}  (n={fr.groupby("condition").size().to_dict()})')
     return a, b
 
 
 def persistence(split='validation'):
+    """Builds the persistence baseline on the fake root's Task 2 split.
+
+    Each link is predicted queued over the whole horizon when it is queued at the last history step (speed at
+    or below 60% of free-flow speed on an eligible cell).
+
+    Returns:
+        DataFrame(window_id, timestamp, link_id, queue_pred) on the sample submission keys.
+    """
     root = SP / 'root' / 'task2'
     out = []
     for panel in FAM:
@@ -55,6 +103,7 @@ def persistence(split='validation'):
         h = pd.read_parquet(root / panel / split / 'window_history.parquet')
         links = pd.read_csv(f'/Volumes/Crucial X9/trafficflow/tfb_competition_data/kaggle_public/corridors/{panel}/network/links.csv', dtype={'link_id': str})
         vc = dict(zip(links.link_id, 0.6 * links.free_speed_kmh))
+        # Last history step of each window.
         last = h[h.timestamp == h.groupby('window_id').timestamp.transform('max')].copy()
         last['q'] = (last.speed_kmh <= last.link_id.map(vc)) & (last.is_score_eligible == 1)
         sub = pd.read_csv(root / panel / split / 'sample_submission_queue.csv', dtype={'link_id': str})

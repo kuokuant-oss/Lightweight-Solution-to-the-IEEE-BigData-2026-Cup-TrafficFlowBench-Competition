@@ -1,4 +1,16 @@
 """Validate/freeze the selected decoder; production is a separate explicit mode."""
+
+# Role: mode `production` runs in the reproduction pipeline (pipeline/onset.sh,
+# step head_decode). It calibrates the panel_shrink25 decoder on the February
+# 2031 calibration probabilities of the frozen 0922 onset head and applies it
+# to that head's validation/private serving probabilities
+# (prior/final_feature_hazard_serving.parquet). Output:
+# onset/production/onset_component.parquet, one row per official onset window
+# and link at step 6 (T+30) with prob and queue_pred, plus calibration.json and
+# manifest.json. Mode `holdout` is the research check of the same decoder on
+# the 55 holdout days.
+# Usage: audit_strongest_onset_selected_20260922.py {holdout|production}
+
 from __future__ import annotations
 import argparse,importlib.util,json
 from datetime import datetime,timezone
@@ -6,18 +18,29 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 ROOT=Path(__file__).resolve().parents[1]
+# D: the decoder audit (calibrate_decoder, decode); X: the onset recipe audit;
+# Q: audit_holdout20_queue (calibrate, decode, frame, sha).
 sp=importlib.util.spec_from_file_location('decode_explore',ROOT/'scripts/audit_strongest_onset_decoder_20260922.py')
 D=importlib.util.module_from_spec(sp);sp.loader.exec_module(D)
 X=D.X;Q=D.Q;TE=D.TE;OUT=D.OUT;HOLD=X.HOLD
 
 
 def descriptors():
+    """Loads final_selection.json and asserts that the selected decoder is panel_shrink25."""
     selection=json.loads((OUT/'final_selection.json').read_text())
     assert selection['selected_recipe']=='panel_shrink25','This replay implements the actually selected unchanged-head decoder'
     return selection
 
 
 def holdout():
+    """Calibrates panel_shrink25 on the native candidate's calibration block and scores it once on the holdout.
+
+    The calibration block is 2030-12-08 .. 2031-01-04. Only the onset step-6
+    decisions change; the head and its probabilities stay as they are.
+
+    Raises:
+        SystemExit: the held set was already evaluated.
+    """
     selection=descriptors();dest=OUT/'held_selected_decoder';dest.mkdir(parents=True,exist_ok=True)
     if (dest/'results.json').exists():raise SystemExit('Selected decoder already evaluated on held set')
     native=HOLD/'native'
@@ -69,18 +92,35 @@ def holdout():
 
 
 def production():
+    """Freezes the production onset component.
+
+    Calibrates the global threshold and the panel_shrink25 thresholds on the
+    February 2031 calibration probabilities of the 0922 head, decodes the
+    served validation/private step-6 probabilities, checks that every window
+    has a queued cell, and writes onset_component.parquet, a copy of the head
+    and manifest.json.
+
+    Raises:
+        SystemExit: the production component already exists.
+    """
     selection=descriptors();dest=OUT/'production';dest.mkdir(parents=True,exist_ok=True)
     if (dest/'manifest.json').exists():raise SystemExit('Production component already frozen')
+    # The 0922 head (scripts/145, case final, arm feature_hazard) and its
+    # February 2031 calibration probabilities on the full link grid.
     source=ROOT/'build/final_sprint_review_20260922'
     model=source/'prior/final_feature_hazard.txt'
     reference_manifest=json.loads((source/'prior/final_feature_hazard_manifest.json').read_text())
     assert reference_manifest['prior_dates'][-1]=='2030-12-31' and reference_manifest['refit_after_calibration'] is False
     ca=pd.read_parquet(source/'fullgrid/final_feature_hazard_calib.parquet')
     assert ca.date.between('2031-02-01','2031-02-28').all() and ca.date.nunique()==28
+    # Global threshold on GRID, then per-panel thresholds shrunk 25 % toward
+    # each panel's best threshold; February 2031 is a train month.
     global_t,grid=Q.calibrate(ca,ca.prob.to_numpy(),'queue_onset',D.M.GRID)
     desc=D.calibrate_decoder('panel_shrink25',ca,ca.prob.to_numpy(),global_t)
     desc.update({'global_threshold':global_t,'global_calibration_grid':grid})
     X.dump(dest/'calibration.json',desc)
+    # Probabilities of the official validation/private onset windows at step 6,
+    # written by pipeline/onset_head_serve.py.
     s=pd.read_parquet(source/'prior/final_feature_hazard_serving.parquet')
     s['condition']='queue_onset';assert s.step.eq(6).all()
     s['queue_pred']=D.decode('panel_shrink25',s,s.prob.to_numpy(),desc).astype('int8')

@@ -9,6 +9,12 @@ templates [static template leave-month-out], distance to queued links).
 Sampling: every cell of Jan/Feb 2031 windows (evaluation months), a u<0.35 subsample elsewhere; column u lets the
 trainer apply the same 35% subsample to any month.
 Output: rows/<panel>_rows.parquet, rows/<panel>_tmpl.npz (per-month template histograms)."""
+#
+# Role: record of how the G2v2 training rows and templates were built. `block_ids` is imported by eval_v2.py and
+# serve_v2.py, and rows/<panel>_tmpl.npz is read by serve_v2.py (reproduction pipeline, task1.sh step 4).
+# Usage: data_v2.py --panel <panel> [--sample 0.35] [--v3]
+# Row columns: G2 and v2 (and v3) features, panel, date, origin T, li (link row), cond, regime, is_target, u
+# (uniform draw used for subsampling), labels y_v (speed), y_q (flow) and y_ql (flow per lane).
 import os, sys, argparse, time
 os.environ.setdefault('OMP_NUM_THREADS', '2')
 import numpy as np, pandas as pd
@@ -19,16 +25,20 @@ from src.tfb import release as R, grid, physics
 from g2_gap_data import gap_features
 HERE = Path(__file__).resolve().parent; sys.path.insert(0, str(HERE))
 from v2feat import v2_features, v3_features, selector_feats, template_from_hist, LG, HISTN, NB
+# my_blocks: per panel, link ids and their block id (groups of links that queue together, built from train).
 BLK = np.load(ROOT / 'build/review_20260924_newworld/work/blocks/my_blocks.npy', allow_pickle=True).item()
+# Months whose hole cells are all kept (the evaluation months).
 FULL_MONTHS = ('2031-01', '2031-02')
 
 
 def block_ids(panel, links):
+    """Returns the block id of each link (in the given order); -1 for a link without a block."""
     m = dict(zip([str(x) for x in BLK[panel]['links']], BLK[panel]['bid']))
     return np.array([m.get(l, -1) for l in links])
 
 
 def main():
+    """Builds the G2v2 training rows of one panel from the train months."""
     ap = argparse.ArgumentParser(); ap.add_argument('--panel', required=True); ap.add_argument('--sample', type=float, default=0.35)
     ap.add_argument('--v3', action='store_true', help='also v3 features; output rows3/')
     a = ap.parse_args(); t0 = time.time(); panel = a.panel
@@ -55,19 +65,23 @@ def main():
         for fld, X in (('speed_kmh', d['TV']), ('flow_vph', d['TQ'])):
             k = (fld, mo, wd)
             S[k] = S.get(k, 0) + np.where(ok, X, 0.0); C[k] = C.get(k, 0) + ok
+        # Queued truth cells add to the month's per-link speed histogram (1 km/h bins).
         qq = ok & (d['TV'] <= vcut[:, None])
         li, ci = np.where(qq); b = np.clip(np.round(d['TV'][li, ci]).astype(int), 0, NB - 1)
         h = H.setdefault(mo, np.zeros((nL, NB), np.int32)); np.add.at(h, (li, b), 1)
     months = sorted(H)
     np.savez_compressed(OUT / f'{panel}_tmpl.npz', months=np.array(months), hist=np.stack([H[m] for m in months]), links=np.array(links))
     def prof(fld, wd, excl):
+        """Returns the mean truth profile of `fld` for weekday `wd` over all months except `excl`."""
         s = sum(v for k, v in S.items() if k[0] == fld and k[2] == wd and k[1] != excl)
         c = sum(v for k, v in C.items() if k[0] == fld and k[2] == wd and k[1] != excl)
         return np.where(c > 0, s / np.maximum(c, 1), np.nan)
     tm_cache = {}
     def tmpl(excl):
+        """Returns the static template (median, IQR of queued speeds per link) from all months except `excl`."""
         if excl not in tm_cache: tm_cache[excl] = template_from_hist(sum(H[m] for m in months if m != excl))
         return tm_cache[excl]
+    # Corrected (v2) replicated official windows with the minutes since their selector predecessor (gap_min).
     wins = pd.read_parquet(HERE / 'train_windows_v2seq.parquet'); wins = wins[wins.panel == panel]
     byd = {d['date']: i for i, d in enumerate(days)}
     rng = np.random.default_rng(11); rows = []; pc = {}
@@ -79,11 +93,14 @@ def main():
         if (wd, mo) not in pc: pc[(wd, mo)] = (prof('speed_kmh', wd, mo), prof('flow_vph', wd, mo))
         HV, HQ = pc[(wd, mo)]
         V, Q, O = d['V'].copy(), d['Q'].copy(), d['O'].copy()
+        # Window history t-12..t-1 restored from truth at eligible cells, as the release republishes it.
         hs = slice(T - HISTN, T); el = d['E'][:, hs]
         for X, TX in ((V, d['TV']), (Q, d['TQ']), (O, d['TO'])):
             X[:, hs] = np.where(el & np.isnan(X[:, hs]), TX[:, hs], X[:, hs])
+        # The hole itself is blank.
         for X in (V, Q, O): X[:, a_:a_ + LG] = np.nan
         f = gap_features(V.astype(float), Q.astype(float), O.astype(float), HV, HQ, a_, nT, par, vcut)
+        # Selector features from the masked layer and gap_min; static template leave-month-out.
         pr, nr, b1 = selector_feats(V, d['E'], vcut, T, float(w.gap_min) if np.isfinite(w.gap_min) else np.nan, w.condition)
         tmed, tiqr = tmpl(mo)
         f.update(v2_features(V, d['E'], a_, nT, vcut, bid, tmed, tiqr, f['queue_pre'][:, 0], f['queue_post'][:, 0],
@@ -91,6 +108,7 @@ def main():
         if a.v3: f.update(v3_features(V, a_, nT, vcut, bid, dict(cond=w.condition, blk1=b1), f['step']))
         yv = d['TV'][:, a_:a_ + LG]; yq = d['TQ'][:, a_:a_ + LG]
         el = d['E'][:, a_:a_ + LG] & np.isfinite(yv) & np.isfinite(yq)
+        # Every hole cell of FULL_MONTHS is kept; elsewhere a `sample` share.
         u = rng.random(el.shape).astype(np.float32)
         keep = el & ((u < a.sample) | (mo in FULL_MONTHS))
         if not keep.any(): continue

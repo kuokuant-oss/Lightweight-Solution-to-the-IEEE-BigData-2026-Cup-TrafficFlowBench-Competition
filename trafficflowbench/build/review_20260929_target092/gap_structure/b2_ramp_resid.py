@@ -2,12 +2,21 @@
 M0 = boundary/base features only (control), M1 = + in-gap ramp features.  Placebo: M1 applied to Feb rows whose ramp
 features come from another Feb date (same panel/origin/link/step).  Reported on Feb target cells against
 (a) the clean v2_F base and (b) the served champion gap values (flow: ch_ql = G2v2; speed: HMP50)."""
+# Research record; pipeline/task1.sh does not run it. The pipeline scripts of
+# this folder import its constants: SP (speed residual features) and FLOOR /
+# CAP (submission speed range, km/h).
+# Inputs: b1_jan.parquet / b1_feb.parquet (gap rows with G2v2 boundary and
+# ramp features) and a1_feb_rows.parquet (served values).
+# Outputs: b2_<model>.txt, b2_results.json and b2_feb_preds.parquet.
 import os, sys, json, gc
 os.environ.setdefault('OMP_NUM_THREADS', '2')
 from pathlib import Path
 import numpy as np, pandas as pd, lightgbm as lgb
 HERE = Path(__file__).resolve().parent; sys.path.insert(0, str(HERE))
 import ramp_feats as RF
+# FL / SP: flow / speed residual features of the G2v2 gap model (p_v / p_ql =
+# base fill; pv, pq = last observed value before the gap, sv, sq = first
+# observed value after it). PHYS: off-ramp-scaled flow features (add_phys).
 KEY = ['panel', 'date', 'origin', 'li', 'step_i']
 FLOOR, CAP = 6.0, 120.74999999999999
 PAR = dict(objective='l2', learning_rate=0.05, num_leaves=31, min_data_in_leaf=500, feature_fraction=0.8,
@@ -21,6 +30,18 @@ PHYS = ['pq_x_cfr', 'sq_x_cfr', 'blend_x_cfr']
 
 
 def add_phys(k):
+    """Adds flow features scaled by the corridor off-ramp ratio.
+
+    pq_x_cfr / sq_x_cfr: per-lane flow before / after the gap times the
+    corridor off-ramp ratio to its pre / post level; blend_x_cfr: their
+    blend weighted by the position in the gap (p_ql where missing).
+
+    Args:
+      k: Gap rows with step_i, lanes, pq, sq, p_ql, cFR_pre and cFR_post.
+
+    Returns:
+      `k` with the three PHYS columns (and `step` when missing).
+    """
     if 'step' not in k: k['step'] = k.step_i.astype(np.float32)
     ln = k.lanes.clip(lower=1); w = (k.step + 1) / 19.0
     k['pq_x_cfr'] = (k.pq / ln * k.cFR_pre).astype(np.float32)
@@ -30,6 +51,20 @@ def add_phys(k):
 
 
 def rel(t, y, base, new):
+    """Compares a candidate column with a base column on the same cells.
+
+    Args:
+      t: Rows with panel, date, cond and lclass.
+      y: Truth column.
+      base: Reference column.
+      new: Candidate column.
+
+    Returns:
+      Dict: both RMSEs, relative MSE change (new / base - 1), its 95 %
+      panel-day bootstrap interval, the change for onset / ongoing windows
+      and mixed / non-mixed links, per panel, and the number of panels that
+      improve.
+    """
     e0 = (t[base] - t[y]) ** 2; e1 = (t[new] - t[y]) ** 2
     g = pd.DataFrame(dict(k=t.panel + '|' + t.date, e0=e0, e1=e1)).groupby('k')[['e0', 'e1']].sum()
     rng = np.random.default_rng(0); ix = rng.integers(0, len(g), (2000, len(g)))
@@ -44,6 +79,7 @@ def rel(t, y, base, new):
 
 
 def main():
+    """Fits the January residual models (with and without ramp features) and tests them on February gaps."""
     jan = add_phys(pd.read_parquet(HERE / 'b1_jan.parquet'))
     feb = add_phys(pd.read_parquet(HERE / 'b1_feb.parquet'))
     a1 = pd.read_parquet(HERE / 'a1_feb_rows.parquet', columns=KEY + ['serve_hmp50', 'ch_ql', 'lclass'])
@@ -54,6 +90,7 @@ def main():
     febp = feb.copy()
     for c in RF.RAMP_FEATS: febp[c] = fp[c].to_numpy()
     febp = add_phys(febp)
+    # Residual targets against the base fill; M0 = without, M1 = with ramp features.
     jan['r_q'] = jan.y_ql - jan.p_ql; jan['r_v'] = jan.y_v - jan.p_v
     ramp = RF.RAMP_FEATS
     res = {}; imps = {}

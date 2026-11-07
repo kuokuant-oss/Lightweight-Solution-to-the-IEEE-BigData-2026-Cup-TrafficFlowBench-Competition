@@ -12,6 +12,12 @@ Scores: S_state (official per-regime form over ALL targets incl. hole), local LW
 frame A (all eligible cells, truth outside targets) and frame B (targets + masked-layer-observed cells only, as
 evallib.py), S_FD over the same frames, S_phys = (S_FD + 2 S_LWR)/3 per regime.
 Outputs: res/<panel>_<M>_<windows>_days.csv (accumulators), res/<panel>_<M>_<windows>_cells.parquet (hole cells)."""
+#
+# Role: record of how the gap models were compared on train months. `gap_matrix` is imported by serve_v2.py
+# (reproduction pipeline, task1.sh step 4). C0 caches go to c0_cache/<panel>_<month>_<windows>.npz.
+# Usage: eval_v2.py --panel <panel> --models name=<model dir>[,...] [--month 2031_02] [--windows v2|v2x|legacy]
+#        [--tag run]
+# A model folder holds gap_features.json, gap_speed.txt (speed model) and gap_flow.txt (per-lane flow model).
 import os, sys, time, argparse, json
 os.environ.setdefault('OMP_NUM_THREADS', '4')
 import numpy as np, pandas as pd, lightgbm as lgb
@@ -28,6 +34,7 @@ PANELS = ['D7_I10_E', 'D7_I10_W', 'D7_I210_E', 'D7_I210_W', 'D7_I405_N', 'D7_I40
 
 
 def load_windows(panel, month, kind):
+    """Returns the hole windows of one panel and month with gap_min (minutes since the previous window)."""
     if kind in ('v2', 'v2x'):
         w = pd.read_csv(HERE / f'eval_windows_{panel}_{month}{"x" if kind == "v2x" else ""}.csv')
         w['gap_min'] = w.tmin - w.tprev_min
@@ -39,6 +46,10 @@ def load_windows(panel, month, kind):
 
 def build_cache(panel, month, kind, wins):
     """Grids with holes + C0 (stack) predictions, cached as npz."""
+    # Returns (z, meta). z holds per day d<i>: v0/q0 (C0 stack fill), V/Q/O (masked layer with holes and restored
+    # history), TV/TQ/TO (truth), E (eligible), rt (scored targets, history excluded), gm (hole cells), rv (cell
+    # pairs valid for the LWR proxy), ln (lanes), a (first column of each hole). meta: dates, regimes, links,
+    # times.
     ym = month.replace('_', '-')
     files = [p for p in P1.split_masked_files(panel, 'train') if month in p.name]
     dates = [p.name[len('synthetic_mainline_'):-len('.parquet')].replace('_', '-') for p in files]
@@ -85,6 +96,7 @@ def build_cache(panel, month, kind, wins):
 
 def month_profiles(panel, ym):
     """Leave-month-out weekday truth profile (as g3_eval) and static templates excluding month ym."""
+    # Returns (profiles {(field, weekday): links x steps}, (template median, template IQR), template link order).
     allm = {}
     for rg in R.REGIME_ORDER:
         for p in R.masked_files(panel, 'train', rg): allm[p.name] = p
@@ -103,6 +115,19 @@ def month_profiles(panel, ym):
 
 
 def gap_matrix(V, Q, O, E, a_, nT, par, vcut, HV, HQ, bid, tmed, tiqr, win):
+    """Builds all gap-model features (G2 base, selector and v2 features) of one hole.
+
+    Args:
+        V, Q, O, E: speed (km/h), flow (veh/h), occupancy and eligibility of the day (links x steps), hole blank.
+        a_: first hole column (T+1); nT: steps per day.
+        par: link parameters; vcut: per-link queue speed (60% of free-flow speed).
+        HV, HQ: weekday profile of speed and flow.
+        bid: block id per link; tmed, tiqr: static queued-speed template per link.
+        win: dict(cond, gap_min).
+
+    Returns:
+        Dict of feature name -> array (links x LG).
+    """
     f = gap_features(V.astype(float), Q.astype(float), O.astype(float), HV, HQ, a_, nT, par, vcut)
     pr, nr, b1 = selector_feats(V, E, vcut, a_ - 1, win['gap_min'], win['cond'])
     f.update(v2_features(V, E, a_, nT, vcut, bid, tmed, tiqr, f['queue_pre'][:, 0], f['queue_post'][:, 0],
@@ -111,6 +136,7 @@ def gap_matrix(V, Q, O, E, a_, nT, par, vcut, HV, HQ, bid, tmed, tiqr, win):
 
 
 def main():
+    """Scores C0 and each gap model on the hole windows of one panel and month and writes the result tables."""
     ap = argparse.ArgumentParser(); ap.add_argument('--panel', required=True); ap.add_argument('--month', default='2031_02')
     ap.add_argument('--windows', default='v2', choices=['v2', 'v2x', 'legacy'])
     ap.add_argument('--models', required=True, help='comma list name=<model dir>')
@@ -142,6 +168,7 @@ def main():
         v0, q0 = z[f'{k}_v0'].astype(float), z[f'{k}_q0'].astype(float); nT = v0.shape[1]
         wd = pd.Timestamp(date).weekday(); cands = [('C0', v0, q0)]
         preds = {nm: (v0.copy(), q0.copy()) for nm, *_ in GM}
+            # One hole per window: predict with every model and record the hole cells.
         for a_ in z[f'{k}_a']:
             if a_ + LG > nT: continue
             w = wins[(wins.date == date) & (wins.origin == a_ - 1)].iloc[0]
@@ -175,6 +202,7 @@ def main():
         obs = np.isfinite(V) & np.isfinite(Q)
         rv = z[f'{k}_rv']; Nt = qt / np.clip(vt, 1, None) * L
         memA = okc & np.isfinite(Nt) & keep[:, None]; memB = memA & (tg | obs)
+        # Errors inside (in) and outside (out) the holes, LWR proxy and FD terms in frames A and B.
         for cand, v, q in cands:
             r = dict(date=date, regime=meta['regimes'][di], cand=cand)
             for kind, m in (('in', tg & gm), ('out', tg & ~gm)):
@@ -200,6 +228,7 @@ def main():
 
 
 def summarize(x):
+    """Returns S_state, S_phys_A/B, S_LWR_A/B (means over regimes) and the in-hole RMSE of one candidate."""
     s = x.groupby('regime').sum(numeric_only=True)
     n = s.n_in + s.n_out
     rv_ = np.sqrt((s.sse_v_in + s.sse_v_out) / n); rq_ = np.sqrt((s.sse_q_in + s.sse_q_out) / n)

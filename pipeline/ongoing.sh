@@ -14,20 +14,35 @@
 # timestamped <= the window's forecast origin T (window_history T-12..T-1, masked layer at T, ramps at T and T-1/T-5,
 # same-split earlier dates for recency, window_index for spacing). No raw February 2031 train file is read; the
 # only raw train file read is each panel's first train day (2030-06-01), for link_id/milepost order.
+#
+# Names: R16b, R21a, R26a and R26c are successive submissions; each operator reproduces the ongoing
+# cells of one of them, and R26c is the selected final file. A (A25) is the six-member LightGBM
+# ensemble served on the newworld tables, N (N6) the refitted ensemble on the CTM tables; my_blocks are
+# train groups of links that congest together; tau is the threshold on a block's mean probability.
+# P and C1f are the R20 operator's decisions; BND re-predicts with the selector inputs corrected for
+# the official 6-hour spacing of windows (k_known); T45 is that decision decoded at tau .45.
 set -eu
 [ $# -eq 1 ] || { echo "usage: ongoing.sh <run_root>" >&2; exit 2; }
 RUN=$(cd "$1" && pwd -P)
 PKG=$(cd "$(dirname "$0")/.." && pwd -P)
 TFB="$PKG/bin/tfb-run"
+# TFB_PYTHON defaults to the pinned environment; run_reproduce.sh always sets it.
 export TFB_PYTHON="${TFB_PYTHON:-$HOME/.venvs/tfb-final-R26c/bin/python}"
 # 3 threads at most (the programs pin LightGBM/numpy to 2 themselves)
 export OMP_NUM_THREADS=3 OPENBLAS_NUM_THREADS=3 MKL_NUM_THREADS=3 VECLIB_MAXIMUM_THREADS=3
+# REPO: the run tree's code copy; REL: the released data inside the run tree.
 REPO="$RUN/trafficflowbench"
 REL="$RUN/tfb_competition_data/kaggle_public"
+# NW, CT: the newworld (A slot) and CTM (N slot) program folders, relative to trafficflowbench/.
 NW=build/review_20260924_newworld/work/feat
 CT=build/review_20260924_ctm
 LOG="$RUN/logs/ongoing"; mkdir -p "$LOG"
 
+# Runs one program through bin/tfb-run and prints its wall time and peak memory.
+# Arguments:
+#   Step name (log file name), program path relative to trafficflowbench/, program arguments.
+# Outputs:
+#   Log in $LOG/<name>.log; on failure the last 40 log lines go to stderr and the segment stops.
 step() {  # step <name> <program.py> [args...]
   name=$1; shift
   printf '[%s] %-16s %s\n' "$(date +%H:%M:%S)" "$name" "$*"
@@ -36,6 +51,9 @@ step() {  # step <name> <program.py> [args...]
   fi
   awk '/ real /{r=$1} /maximum resident set size/{m=$1} END{printf "           %8.1f s  peak RSS %6.0f MB\n", r, m/1048576}' "$LOG/$name.log"
 }
+# Moves a file written in the repo root into the folder where the original run left it.
+# Arguments:
+#   File name (relative to the repo root), destination folder (relative to the repo root).
 here() {  # here <file> <dir>: the only command not run through tfb-run.
   # build_serve_feats.py writes f'serve_{tag}.parquet' relative to its working directory (the original runs were
   # started from ctm/serve and newworld/work/feat). tfb-run always starts programs in the repo root, so the file is

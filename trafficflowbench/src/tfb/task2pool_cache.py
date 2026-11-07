@@ -39,10 +39,17 @@ import pandas as pd
 
 from . import task2pool as TP
 
+# Role: no program of the reproduction pipeline imports this module; it is the
+# record of the cached training-window pool. VERSION is hashed into the cache
+# key, so a new version never reads an older cache.
 VERSION = 2
 
 
 def _key(panels: list[str], sampler: str, params: dict) -> str:
+    """Returns the cache key: a SHA-256 prefix of panels, sampler and params.
+
+    VERSION is hashed in as well, so any change to it is a cache miss.
+    """
     blob = json.dumps({"panels": sorted(panels), "sampler": sampler,
                        "params": params, "version": VERSION}, sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
@@ -51,6 +58,12 @@ def _key(panels: list[str], sampler: str, params: dict) -> str:
 def chain_pool(dates: set[str], panels: list[str], cache_dir: Path,
                name: str = "chain", rule=None, verbose: bool = True) -> pd.DataFrame:
     """The spacing-chain window pool over ``dates``, cached with its manifest."""
+    # `dates`: YYYY-MM-DD train days wanted. `cache_dir` holds
+    # <name>_<key>.parquet (the windows) and <name>_<key>.meta.json (scanned,
+    # produced and barren dates). Only dates not yet scanned are enumerated
+    # with task2pool and chained, then appended to the cache.
+    # Returns the cached windows whose date is in `dates`.
+    # Raises RuntimeError when a requested date is still unscanned.
     rule = rule or TP.rules()
     params = {"spacing_steps": int(rule.spacing_steps),
               "min_history_coverage": float(rule.min_history_coverage),

@@ -5,18 +5,26 @@ Apply to work/off_rows_<split>.parquet (every eligible official hole cell), keep
 parent), new speed = clip(parent speed + dv, 6.0, 120.75), flow = parent.
 Also R2 = private leave-days-out (odd/even) on the private pseudo holes with the same recipe.
 -> work/trans_state_rows_<split>.parquet, work/trans_state_rows.parquet (both splits, 128,465 rows), results/r6_serve.json"""
+# Task 1 reproduction pipeline, step 6 (`pipeline/task1.sh`, log `t1_serve`).
+# The correction dv comes from the recomputed hole-model features and is added
+# to the parent's hole speed. pipeline/task1_state_csv.py writes
+# trans_state_rows.parquet (the T1 layer) into the later parent CSVs; the HM25
+# step (hole mixture) also loads the boosters work/fs_speed_<split>.txt.
 import sys, json
 sys.dont_write_bytecode = True
 import numpy as np, pandas as pd
 import serve_lib as S
 from s2_cands import parent_state
 
+# G2v2 v2_F hole rows: their submission_ids are the official hole cells.
 G2F = S.ROOT / 'build/review_20260925/task1/g2v2F_state_rows.parquet'
 
 
 def main():
+    """Fits the correction per split, applies it to the official hole rows and writes the T1 rows and the report."""
     res = json.load(open(S.HERE / 'results' / 'r6_serve.json')) if (S.HERE / 'results' / 'r6_serve.json').exists() else {}
     holes = set(pd.read_parquet(G2F).submission_id.astype(np.int64))
+    # ldo_dv is not used further.
     ldo_dv = {'validation': None}
     r1 = np.load(S.HERE / 'work' / 'r1_validation_ldo_pv.npy')
     outs = []
@@ -39,6 +47,8 @@ def main():
         m = S.fit(D); m.save_model(str(S.HERE / 'work' / f'fs_speed_{split}.txt'))
         Of = pd.read_parquet(S.HERE / 'work' / f'off_rows_{split}.parquet'); S.derive(Of)
         Of['dv'] = S.correction(m, Of)
+        # Parent hole rows of the split, each joined to its official-row
+        # correction (every hole row must have one).
         ps = parent_state(split); ps = ps[ps.submission_id.isin(holes)]
         k = ps.merge(Of[['panel', 'timestamp', 'link_id', 'ch_v', 'ch_ql', 'dv', 'cond', 'window_id']], on=['panel', 'timestamp', 'link_id'],
                      how='left', validate='one_to_one')
@@ -49,6 +59,8 @@ def main():
         k['speed_new'] = np.clip(k.speed_kmh.to_numpy() + k.dv.to_numpy(), S.SPEED_FLOOR, S.SPEED_CAP)
         r['official_dv_keyrows'] = S.desc(k.speed_new - k.speed_kmh)
         r['official_dv_allcells'] = S.desc(Of.dv)
+        # Recorded check, not enforced: the 99th percentile of |dv| on the
+        # official rows stays within 1.5 x the held-out one.
         r['abs_p99_ratio_official_vs_heldout'] = r['official_dv_keyrows']['abs_p99'] / r['heldout_dv']['abs_p99']
         r['integrity_p99_ok'] = bool(r['abs_p99_ratio_official_vs_heldout'] <= 1.5)
         r['official_dv_by_panel'] = k.assign(d=k.speed_new - k.speed_kmh).groupby('panel').d.agg(['size', 'mean', lambda x: float(np.abs(x).mean())]).rename(columns={'<lambda_0>': 'abs_mean'}).round(4).to_dict('index')

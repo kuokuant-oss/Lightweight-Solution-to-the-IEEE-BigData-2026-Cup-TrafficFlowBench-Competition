@@ -7,7 +7,18 @@ Variants (all: same rows, labels, weights, params, rounds and seeds as R20 L0; 2
   M3  M1 + M2
 Outputs per variant: models + seed probabilities on held_matched, held_raw, march_v2, march_v1 (no decoding, no scoring).
 """
+# Research record of the monotone ("mono") LightGBM probe; pipeline/ongoing.sh
+# does not run it. s1_serve_prob.py imports it for `variant_cols`, which gives
+# the feature columns of the served monotone models M1f / M1sf
+# (models/M1f_seed*.txt, models/M1sf_seed*.txt; columns of variants M1 / M1s,
+# where M1s is M1 without the queue-geometry features).
+# Monotone constraints (MONO): lower speed or margin to the queue speed, and
+# higher occupancy, queued neighbours or recency, can only raise the queue
+# probability. base196: the 98 base features z-scored, then 98 missing flags
+# (TRANSFORM_base196.json).
+# Usage: m_train_infer.py VARIANT [VARIANT ...]   (or L0saved)
 import os, sys
+# Caps the BLAS/OpenMP thread pools at 2 before numpy and LightGBM load.
 for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
     os.environ[k] = "2"
 sys.dont_write_bytecode = True
@@ -16,11 +27,14 @@ import json, time, argparse, gc
 import numpy as np, pandas as pd
 import lightgbm as lgb
 
+# Original absolute root; bin/tfb-run maps it onto the run tree.
 R20 = Path("/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_round20")
 QD = R20 / "queue_data"
 sys.path.insert(0, str(QD))
 from transform import transform_block  # noqa: E402
 
+# CACHE: R20 fit and held-out tables; FS: the 98 base features; NAMES:
+# base196 column names; CFG: the R20 L0 LightGBM params and rounds per seed.
 CACHE = QD / "cache"
 OUT = Path(__file__).resolve().parent
 SPEC = json.loads((QD / "TRANSFORM_base196.json").read_text())
@@ -29,6 +43,8 @@ assert len(FS) == 98
 NAMES = [f"z_{i}_{n}" for i, n in enumerate(FS)] + [f"missing_{i}_{n}" for i, n in enumerate(FS)]
 CFG = json.loads((QD / "INPUT_MANIFEST.json").read_text())["gbdt_config"]
 
+# MONO: monotone sign per feature (+1: a higher value can only raise the
+# queue probability; -1: only lower it).
 MONO = {  # sign prior for P(queued at a future step)
     "speed_origin": -1, "occ_origin": +1, "margin_origin": -1, "min_speed_hist": -1, "mean_speed_hist": -1,
     "min_margin_hist": -1, "trend_speed_3": -1, "trend_speed_6": -1, "trend_occ_3": +1, "is_queued_origin": +1,
@@ -37,6 +53,8 @@ MONO = {  # sign prior for P(queued at a future step)
     "origin_speed_T": -1, "origin_occ_T": +1, "origin_margin_T": -1, "origin_queued_T": +1,
     "origin_margin_T_up1": -1, "origin_margin_T_dn1": -1, "rec_s": +1, "rec_any": +1, "rec_n": +1,
 }
+# Feature groups that variants drop (DROPS): static link identity, ramp
+# flows, time of day and queue geometry.
 STATIC = ["milepost", "lanes", "free_speed", "capacity", "length_km", "v_cut", "dist_to_onramp_km"]
 RAMP = ["onramp_flow", "offramp_flow", "onramp_flow_upstream", "onramp_flow_upstream_oblique", "origin_ramp_T",
         "origin_ramp_mask_T", "origin_dramp", "origin_on_ramp_T", "origin_off_ramp_T", "origin_net_ramp_T", "origin_dnet_ramp"]
@@ -47,6 +65,16 @@ DROPS = {"M2": STATIC, "M3": STATIC, "M4": RAMP, "M5": TOD, "M6": STATIC + RAMP,
 
 
 def variant_cols(v):
+    """Returns the base196 column indices and monotone signs of a variant.
+
+    Args:
+      v: Variant name, e.g. 'M0', 'M1', 'M1s'.
+
+    Returns:
+      (cols, mono): column indices into base196 (kept z-scored columns, then
+      their missing flags) and one constraint per column (0 = none; set only
+      for M1, M3 and M1s).
+    """
     drop = set(DROPS.get(v, []))
     keep = [i for i, n in enumerate(FS) if n not in drop]
     cols = keep + [98 + i for i in keep]
@@ -59,6 +87,7 @@ def variant_cols(v):
 
 
 def train(v, seed):
+    """Trains one seed of a variant on the R20 fit rows and saves models/<v>_seed<seed>.txt (skipped when present)."""
     cols, mono = variant_cols(v)
     names = [NAMES[c] for c in cols]
     out = OUT / "models" / f"{v}_seed{seed}.txt"
@@ -83,6 +112,13 @@ def train(v, seed):
 
 
 def infer(v, models=None, tag=None):
+    """Writes per-seed probabilities of a variant on the held-out and March tables (prob/<src>_<tag>_prob.npz).
+
+    Args:
+      v: Variant whose columns are used.
+      models: Boosters to use; defaults to the three saved seeds of `v`.
+      tag: Output name; defaults to `v`.
+    """
     cols, _ = variant_cols(v)
     tag = tag or v
     if models is None:

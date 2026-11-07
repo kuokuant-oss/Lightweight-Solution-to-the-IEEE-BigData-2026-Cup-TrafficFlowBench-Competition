@@ -32,6 +32,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+# Role: no program of the reproduction pipeline imports this module; it is the
+# record of the neural sequence-model experiment.
+# CHANNELS: inputs per (link, history stamp) built by window_tensor, in order:
+# speed / 100, flow / 2000, occupancy, eligibility, queued flag, margin
+# (speed / v_cut), on-ramp and off-ramp flow / 2000, ramp-reading mask,
+# capacity / 8000, free speed / 120, length (km), lanes / 5, and sine and
+# cosine of the time of day. HIST, HOR: history and horizon length in steps.
 CHANNELS = ("v_norm", "q_norm", "occ", "elig", "is_queued", "margin",
             "onramp", "offramp", "ramp_mask", "cap_norm", "vf_norm", "len_norm",
             "lanes_norm", "tod_sin", "tod_cos")
@@ -50,6 +57,12 @@ def ramp_history(panel, links, times, rday, attach, sgn: int = 1):
     which (link, stamp) cells actually had a reading, and the caller slices
     only stamps at or before the forecast origin.
     """
+    # `times`: the day's stamps; `rday`: the day's ramp rows (timestamp,
+    # ramp_link_id, flow_vph), matched to `times` by exact value; `attach`:
+    # the ramp attachment map. `sgn` is accepted and not used.
+    # Returns three float32 (n_links x n_times) arrays: on-ramp flow and
+    # off-ramp flow (veh/h, summed per attached mainline link) and a 0/1 mask
+    # of cells with a reading.
     li = {k: i for i, k in enumerate(map(str, links))}
     n, T = len(links), len(times)
     on = np.zeros((n, T), np.float32)
@@ -86,6 +99,11 @@ def ramp_history(panel, links, times, rday, attach, sgn: int = 1):
 def window_tensor(V, Qf, O, E, t: int, vcut, static, ramps,
                   ramp_hist=None, n_times: int = 288) -> np.ndarray:
     """(n_links, HIST, C) float32 for one window. Columns t-HIST..t-1 only."""
+    # V, Qf, O, E: the day's (link x stamp) arrays; `t`: grid column of the
+    # forecast time T. `static`: task2feat.static_table; `ramps`: the
+    # task2feat.ramp_vectors dict, used only when `ramp_hist` (ramp_history
+    # output) is None. The time-of-day channels assume column 0 is midnight
+    # and n_times stamps per day. Missing values become 0.
     hs, he = t - HIST, t
     v = V[:, hs:he]
     q = Qf[:, hs:he]
@@ -95,6 +113,7 @@ def window_tensor(V, Qf, O, E, t: int, vcut, static, ramps,
         margin = v / vcut[:, None]
     n, T = v.shape
     def tile(x):
+        """Repeats a per-link vector across the history stamps."""
         return np.repeat(np.asarray(x, dtype=np.float32)[:, None], T, axis=1)
     cap = static["capacity"].to_numpy(dtype=np.float32)
     vf = static["free_speed"].to_numpy(dtype=np.float32)
@@ -131,6 +150,14 @@ def window_tensor(V, Qf, O, E, t: int, vcut, static, ramps,
 
 
 def build():
+    """Defines the network modules and returns the QueueNet class.
+
+    torch is imported here so that the rest of the module loads without it.
+
+    Returns:
+        QueueNet, a torch module mapping (x, prior_logit) to (B, L, HOR)
+        logits.
+    """
     import torch
     import torch.nn as nn
 
@@ -138,6 +165,7 @@ def build():
         """Dilated causal convolution over time, applied per link."""
 
         def __init__(self, c_in: int, width: int, dilations=(1, 2, 4)):
+            """Stacks one kernel-3 convolution with GELU per dilation."""
             super().__init__()
             self.blocks = nn.ModuleList()
             self.pads = list(dilations)
@@ -148,6 +176,7 @@ def build():
             self.width = width
 
         def forward(self, x):                      # x (B*L, C, T)
+            """Applies the blocks with left padding, so step t sees steps <= t."""
             for blk, d in zip(self.blocks, self.pads):
                 x = blk(torch.nn.functional.pad(x, (2 * d, 0)))   # left pad = causal
             return x
@@ -159,6 +188,7 @@ def build():
         mean what their names say on every corridor."""
 
         def __init__(self, width: int, k: int = 5):
+            """Creates the upstream and downstream kernels and a 1x1 mixer."""
             super().__init__()
             self.k = k
             self.up = nn.Conv1d(width, width, k)        # pads on the low side
@@ -166,13 +196,21 @@ def build():
             self.mix = nn.Sequential(nn.Conv1d(3 * width, width, 1), nn.GELU())
 
         def forward(self, h):                       # h (B, W, L)
+            """Returns h plus a mixed update from both one-sided kernels."""
             k = self.k - 1
             u = self.up(torch.nn.functional.pad(h, (k, 0)))   # sees lower index = upstream
             d = self.dn(torch.nn.functional.pad(h, (0, k)))   # sees higher index = downstream
             return h + self.mix(torch.cat([h, u, d], dim=1))
 
     class QueueNet(nn.Module):
+        """Causal TCN per link, directed chain layers, then a 1x1 head.
+
+        The head also receives the mean prior logit of each link, and the
+        prior logit is added to the output as an offset.
+        """
+
         def __init__(self, c_in: int, width: int = 64, n_spatial: int = 3, hor: int = HOR):
+            """Sets the hidden width, number of chain layers and horizon."""
             super().__init__()
             self.tcn = CausalTCN(c_in, width)
             self.spatial = nn.ModuleList([DirectedChain(width) for _ in range(n_spatial)])
@@ -204,6 +242,8 @@ def soft_iou_loss(logit, y, mask, eps: float = 1.0):
     per-window soft IoU is not row-additive, so it is a proxy that has to be
     measured, not a derivation of the metric.
     """
+    # logit, y, mask: (B, L, HOR) tensors; mask is 1 on scored cells. eps
+    # smooths the ratio, so a window with an empty union scores 0 loss.
     import torch
     p = torch.sigmoid(logit) * mask
     y = y * mask

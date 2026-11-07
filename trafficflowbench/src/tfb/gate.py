@@ -1,5 +1,15 @@
 """submission_compact checkpoint 的 baseline 研究 Gate。"""
 
+# Research gate for the baseline checkpoint (the module text and messages are
+# in Chinese). check() reads the project's research notes and plans under doc/,
+# not data or models, and lists what is missing: step 1, the coverage table in
+# doc/reference/notes/README.md; step 2, cited sources in every note; step 3, a
+# source note and a measured number for every method row of
+# doc/plan/baseline*.md; and no contaminated token in doc/, scripts/ or src/.
+# require() raises GateFailure on any finding, but only when the environment
+# variable TFB_RESEARCH_GATE is 'on'; otherwise it returns at once. Training
+# builders such as scripts/60 and scripts/112 call require() at import time.
+
 from __future__ import annotations
 
 import re
@@ -9,12 +19,19 @@ REPO = Path(__file__).resolve().parents[2]
 NOTES = REPO / "doc" / "reference" / "notes"
 PLAN = REPO / "doc" / "plan"
 
+# TARGETS: the four tasks the coverage table must cover. CATEGORIES: the four
+# kinds of research it must cover (top-ranked solutions, literature, strong
+# code, problem framing). SOURCE_MARKS: tags that count as a cited source
+# (official, literature, competitor, local). COVERAGE_HEADING: the README
+# heading of the coverage table ("step 1: four kinds of sources x four targets").
 TARGETS = ("task1", "task2", "task3", "task4")
 CATEGORIES = ("名次解法", "文獻", "強代碼", "破題")
 SOURCE_MARKS = ("[官方]", "[文獻]", "[選手]", "[本地]")
 MIN_SOURCES_PER_NOTE = 3
 COVERAGE_HEADING = "## 步驟 1 的四類資料 × 四個目標"
 
+# Tokens marked as contaminated (file names and score values); any .md or .py
+# file under doc/, scripts/ or src/ that contains one fails the gate.
 CONTAMINATED_TOKENS = (
     "ablation_queue_zero",
     "calib_official_t1",
@@ -29,9 +46,17 @@ CONTAMINATED_TOKENS = (
 
 class GateFailure(RuntimeError):
     """研究 Gate 未通過。"""
+    # Raised by require(); the message lists every finding.
 
 
 def _tables(text: str) -> list[list[list[str]]]:
+    """Parses the Markdown pipe tables in `text`.
+
+    Returns:
+        One list per table; each table is a list of rows and each row a list of
+        stripped cell strings. Separator rows (only '-', ':' and spaces) are
+        skipped.
+    """
     out: list[list[list[str]]] = []
     cur: list[list[str]] = []
     for line in text.splitlines():
@@ -50,6 +75,12 @@ def _tables(text: str) -> list[list[list[str]]]:
 
 
 def _check_coverage(fail: list[str]) -> None:
+    """Step 1: checks the coverage table in doc/reference/notes/README.md.
+
+    The first table under COVERAGE_HEADING must name every CATEGORIES entry in
+    its header, have a row for every TARGETS entry and have no empty or
+    placeholder cell ('-', '?', 'TBD'). Findings are appended to `fail`.
+    """
     readme = NOTES / "README.md"
     if not readme.is_file():
         fail.append("步驟 1:notes/README.md 不存在")
@@ -78,6 +109,10 @@ def _check_coverage(fail: list[str]) -> None:
 
 
 def _check_notes(fail: list[str]) -> None:
+    """Step 2: checks that every note in doc/reference/notes cites at least MIN_SOURCES_PER_NOTE sources.
+
+    A source is a URL or one of SOURCE_MARKS. Findings are appended to `fail`.
+    """
     files = sorted(path for path in NOTES.glob("*.md")
                    if path.name != "README.md" and not path.name.startswith("._"))
     if not files:
@@ -91,6 +126,13 @@ def _check_notes(fail: list[str]) -> None:
 
 
 def _check_plan(fail: list[str]) -> None:
+    """Step 3: checks the method tables of doc/plan/baseline*.md.
+
+    A table whose header has a source column (header text 來源, "source") must
+    also have an analysis column (分析, "analysis"). Every row must cite an
+    existing note as notes/NN in its source cell and give a number in its
+    analysis cell. Findings are appended to `fail`.
+    """
     plans = sorted(path for path in PLAN.glob("baseline*.md") if not path.name.startswith("._"))
     if not plans:
         fail.append("步驟 3:缺少 doc/plan/baseline*.md")
@@ -124,6 +166,7 @@ def _check_plan(fail: list[str]) -> None:
 
 
 def _check_contamination(fail: list[str]) -> None:
+    """Flags every .md or .py file under doc/, scripts/ or src/ (this file excepted) that contains a CONTAMINATED_TOKENS entry."""
     here = Path(__file__).resolve()
     for directory in ("doc", "scripts", "src"):
         for path in sorted((REPO / directory).rglob("*")):
@@ -141,6 +184,11 @@ def _check_contamination(fail: list[str]) -> None:
 
 
 def check() -> list[str]:
+    """Runs the four checks.
+
+    Returns:
+        The findings as messages (in Chinese); empty when the gate passes.
+    """
     fail: list[str] = []
     _check_coverage(fail)
     _check_notes(fail)
@@ -150,6 +198,14 @@ def check() -> list[str]:
 
 
 def require() -> None:
+    """Enforces the research gate when it is switched on.
+
+    The gate is on only when the environment variable TFB_RESEARCH_GATE is
+    'on' (any case); otherwise the function returns at once.
+
+    Raises:
+        GateFailure: the gate is on and check() returned findings.
+    """
     # 2026-11-07 使用者授權關閉此閘門（原話：「我 現在授權關掉此閘門」），供最終套件復現 v3 stack 等舊建檔程式。
     # 閘門檢查的是 doc/scripts/src 的文件與字串，不是資料或模型；11-07 的 3 筆命中是存檔副本與血統文件的誤判。
     # 預設關閉；設 TFB_RESEARCH_GATE=on 可恢復原本的檢查。check() 不變，仍可單獨呼叫。

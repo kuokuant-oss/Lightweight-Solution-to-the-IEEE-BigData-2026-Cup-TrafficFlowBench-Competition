@@ -6,12 +6,19 @@ Recipe = floor_audit/s15_longrange.py: L2, lr .05, 63 leaves, min_data_in_leaf 3
 free cells (C1 v/vf >= .85) subsampled 30% with weight 1/.3.
 Reports: MSE by stratum, per-panel dS_state / dS_LWR_A / dS_LWR_B / dS_FD, family-level summary (8 and 10 panels),
 projected dLB = .35 dS_state + .15 dS_phys_B x [.73, .86], day bootstrap (200) of dLB_lo."""
+#
+# Role: record of how the RL / RLB residual models were trained and evaluated; the reproduction pipeline does not
+# run it. Transfer mode saves the fitted models to models/<variant>_fit<M1>/ (feats.json, y_v.txt, y_q.txt).
+# Inputs: feats/<panel>_<month>.parquet (and blk_<panel>_<month>.parquet for RLB) with residual labels y_v
+# (speed) and y_q (flow per lane), and the evaluator cache of rleval.py. Outputs go to results/<tag>*.
+# Usage: rl_eval.py --mode crossfit --month M | --mode transfer --fit M1 --test M2 [--variants RL RLB] [--kstar]
 import os, sys, argparse, time, json
 os.environ.setdefault('OMP_NUM_THREADS', '3')
 import numpy as np, pandas as pd, lightgbm as lgb
 from pathlib import Path
 HERE = Path(__file__).resolve().parent; sys.path.insert(0, str(HERE))
 import rlfeat as RF, rleval as EL
+# LightGBM parameters (L2 regression); NROUND can be changed with the RL_NROUND environment variable.
 P = dict(objective='l2', learning_rate=0.05, num_leaves=63, min_data_in_leaf=300, feature_fraction=0.8, bagging_fraction=0.8,
          bagging_freq=1, lambda_l2=10.0, num_threads=3, verbose=-1)
 NROUND = int(os.environ.get('RL_NROUND', 400))
@@ -22,6 +29,7 @@ SEL = json.load(open(_ROOT / 'build/strongest_candidate_20260922/state/transfer/
 
 def kstar(v, q, khat, lanes, alpha, weights):
     """= scripts/audit_strongest_state_20260922.apply(family='joint_aux')."""
+    # Same projection as apply_rl.kstar, with the bounds written inline.
     kk = np.maximum((1 - alpha) * q / v + alpha * khat, 0)
     wv = weights['speed_precision']; wq = weights['flow_lane_precision'] / np.square(lanes)
     vv = np.clip((wv * v + wq * kk * q) / (wv + wq * np.square(kk)), 6.0, 120.74999999999999)
@@ -29,6 +37,7 @@ def kstar(v, q, khat, lanes, alpha, weights):
 
 
 def featsets():
+    """Returns {variant: feature list}: 'RL' and, when rlb_feats.json exists, 'RLB' (RL + block features)."""
     fs = {'RL': list(RF.FEATS)}
     bf = HERE / 'rlb_feats.json'
     if bf.exists(): fs['RLB'] = list(RF.FEATS) + json.load(open(bf))
@@ -36,6 +45,7 @@ def featsets():
 
 
 def load_month(month, need_blk):
+    """Returns the feature table of all 10 panels for one month (with the block features when need_blk)."""
     parts = []
     for p in EL.PANELS10:
         d = pd.read_parquet(HERE / 'feats' / f'{p}_{month}.parquet')
@@ -47,6 +57,13 @@ def load_month(month, need_blk):
 
 
 def fit(D, sub_mask, feats, seed=0):
+    """Fits the speed and per-lane flow residual models on the rows of sub_mask.
+
+    Free-flow cells (C1 speed >= 85% of free-flow speed) are subsampled to 30% and weighted 1/0.3.
+
+    Returns:
+        {'y_v': booster, 'y_q': booster}.
+    """
     free = (D.p_r >= 0.85).to_numpy(); U = np.random.default_rng(seed).random(len(D))
     sub = sub_mask & (~free | (U < 0.3)); w = np.where(free, 1 / 0.3, 1.0)[sub]
     ms = {}
@@ -56,11 +73,13 @@ def fit(D, sub_mask, feats, seed=0):
 
 
 def main():
+    """Runs one cross-fit or transfer evaluation and writes the result tables."""
     ap = argparse.ArgumentParser(); ap.add_argument('--mode', choices=['crossfit', 'transfer'], required=True)
     ap.add_argument('--month'); ap.add_argument('--fit'); ap.add_argument('--test'); ap.add_argument('--variants', nargs='+', default=['RL'])
     ap.add_argument('--boot', type=int, default=200); ap.add_argument('--kstar', action='store_true')
     a = ap.parse_args(); t0 = time.time()
     FS = featsets(); need_blk = any(v != 'RL' for v in a.variants)
+    # Models train on the 8 queue panels only (panel_i 0-7); the D12_I405 pair is scored as a supplement.
     train8 = lambda D: D.panel_i.isin(range(8)).to_numpy()
     if a.mode == 'crossfit':
         tag = f'crossfit_{a.month}'; month = a.month
@@ -107,6 +126,7 @@ def main():
         cands = {'C1': (None, None)}
         for v in oof: cands[v] = ((r.p_v + oof[v]['y_v'][idx]).to_numpy(), (r.p_q + oof[v]['y_q'][idx]).to_numpy())
         ndays = len(EL.load(panel, month)[1]['dates'])
+        # --kstar: also score the production composition, k* applied after C1 ('K') or after RL / RLB ('<v>K').
         if a.kstar:   # production composition on the 5 k* corridors: K = k*(C1), <v>K = k*(<v>(C1)); identity elsewhere
             ln = np.maximum(EL.load(panel, month)[0]['ln'], 1.0)[r.li.to_numpy(int)]
             base = {'C1': (r.p_v.to_numpy(float), r.p_q.to_numpy(float))}; base.update({v: cands[v] for v in oof})

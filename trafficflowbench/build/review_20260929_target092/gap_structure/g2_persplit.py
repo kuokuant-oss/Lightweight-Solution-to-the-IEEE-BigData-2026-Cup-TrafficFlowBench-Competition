@@ -4,6 +4,13 @@ RR  = LightGBM residual on top of the strict HMP50 (pool50; OOF for both halves)
       ramp feats + pool50 + HM pooled p; fit on one half of days, predict the other.  RR05 = half strength.
 PRP = per-split ramp-aware queue-probability head (binary), group-pooled over labelled cells, inside HMP50 structure.
 Baseline for comparison: 'resid' = frozen Jan-fit correction at lam .5 (the D1 candidate)."""
+# Runs in pipeline/task1.sh step 9 once per split, after c4_phead_transfer.py.
+# Its g2_<split>_feats.parquet (pseudo-hole rows with all features and the
+# queue label yq) is the training table of the PR heads in d2_official_prp.py.
+# "Transductive": fit on the released month itself, which Task 1 allows.
+# Usage: g2_persplit.py <validation|private>
+# Outputs: g2_<split>_feats.parquet, g2_<split>_preds.parquet and
+# g2_<split>_results.json.
 import os, sys, json, gc
 os.environ.setdefault('OMP_NUM_THREADS', '2')
 from pathlib import Path
@@ -19,6 +26,11 @@ NR = 400
 
 
 def build(split):
+    """Returns the feature table of one split's pseudo holes (cached in g2_<split>_feats.parquet).
+
+    Starts from c4_<split>_preds.parquet and adds the G2v2 gap features (SP)
+    and the ramp features of the split's own released ramp counts.
+    """
     p = HERE / f'g2_{split}_feats.parquet'
     if p.exists(): return pd.read_parquet(p)
     src = R2 if split == 'validation' else R3
@@ -37,6 +49,7 @@ def build(split):
 
 
 def main():
+    """Fits RR and PR on odd/even halves of one split and scores the variants against pool50."""
     split = sys.argv[1]
     t = build(split)
     feats = SP + RF.RAMP_FEATS + RF.NEAR_FEATS + ['pool50', 'pp']

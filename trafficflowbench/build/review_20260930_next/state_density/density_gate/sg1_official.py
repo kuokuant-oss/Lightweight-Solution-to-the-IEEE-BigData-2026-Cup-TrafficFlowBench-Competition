@@ -1,5 +1,15 @@
 """Frozen SG1 gate selects a strict subset of the immutable J1 updates; no fit."""
+# Runs in pipeline/task1.sh step 10 ("sg1_serve"), after j1_official.py.
+# SG1: keeps the J1 keyed updates only on general cells where the parent
+# (CAP / R11c) speed is below 85 % of free-flow speed (vf of the RLB serving
+# tables). No model is fit; old and new values are copied unchanged.
+# Checks first: the February gate (feb_results.json), the SHA256 of the J1
+# head and of the J1 updates, and the J1 manifest.
+# Outputs in this folder: state_updates_SG1_CAP_DENSITY_GATE.parquet
+# (submission_id, speed_kmh, flow_vph, old_speed_kmh, old_flow_vph) and
+# OFFICIAL_UPDATES.json.
 import os
+# Caps the BLAS/OpenMP thread pools at 2 before numpy loads.
 for k in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','VECLIB_MAXIMUM_THREADS'):
     os.environ[k]='2'
 import sys,json,time,gc,resource
@@ -10,12 +20,20 @@ HERE=Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE))
 import sg1 as G
 J=G.J;D=G.D;BASE=G.BASE
+# MODEL_SHA: J1 head cap_full_feb.txt; SOURCE_SHA: J1 updates file;
+# PARENT_SHA: original R11c CSV (as recorded in the J1 manifest).
 N=6980503
 MODEL_SHA='37b6d4363ab0316ea9e47df7f1e436fb89f7dd6085390c4dfaaa8230227187d6'
 SOURCE_SHA='223e400960b737bb0ef262f676c34505047771882373fda07319c084f83c9a1a'
 PARENT_SHA='b6378dfdc7644e76fdc92f24b19791af71675ceadca809fe70ee4d43dd9458ba'
 
 def serve():
+    """Selects the SG1 subset of the J1 updates and writes it.
+
+    Raises:
+      AssertionError: When a gate or SHA256 check fails, the output already
+        exists, or the subset is empty, complete or out of range.
+    """
     start=time.time()
     assert json.loads((HERE/'feb_results.json').read_text())['pass_feb']
     months={s:json.loads((HERE/f'{s}_results.json').read_text())for s in ['validation','private'] if (HERE/f'{s}_results.json').exists()}  # package edit: month gate files are not shipped
@@ -47,6 +65,7 @@ def serve():
             partitions.append(dict(panel=p,split=split,general_keys=len(keys)))
             del d;gc.collect()
     assert seen.sum()==6010695 and seen[sid].all()
+    # Gate on the parent (old) speed of each J1 update.
     keep=G.cap_gate(u.old_speed_kmh.to_numpy(),vf[sid])
     z=u.loc[keep].copy()
     assert len(z)>0 and len(z)<len(u) and z.submission_id.is_unique

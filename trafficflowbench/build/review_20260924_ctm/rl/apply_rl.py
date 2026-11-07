@@ -5,6 +5,14 @@ precision weights as build/strongest_candidate_20260922/state/transfer/serving) 
 Hole rows are never touched (they keep G2).  Writes rl_state_rows.parquet (submission_id, speed_kmh, flow_vph) for every
 state row whose 3-decimal value differs from the champion CSV, plus results/apply_<name>.json with change statistics.
 Usage: apply_rl.py --model models/RL_final [--out rl_state_rows.parquet]"""
+#
+# Role: reproduction pipeline, task1.sh step 3: `--model models/RLB_final --fallback-model models/RL_final
+# --fallback-panels D12_I405_N D12_I405_S --out rlb_state_rows.parquet`. RLB_final is the residual LightGBM with
+# block features; the Task-1-only D12_I405 pair has no blocks and uses RL_final. In the pipeline the champion
+# CSV is the state-only parent rebuilt by pipeline/task1_state_csv.py just before this step.
+# Inputs: feats/serve_*.parquet and feats/blk_serve_*.parquet from serve_feats.py; a model folder holds
+# feats.json (feature list), y_v.txt (speed residual model) and y_q.txt (per-lane flow residual model).
+# Also writes results/apply_<out stem>.csv with the per-panel statistics.
 import os, sys, argparse, json, time
 os.environ.setdefault('OMP_NUM_THREADS', '3')
 import numpy as np, pandas as pd, lightgbm as lgb
@@ -12,12 +20,18 @@ from pathlib import Path
 ROOT = Path('/Volumes/Crucial X9/trafficflow/trafficflowbench'); sys.path.insert(0, str(ROOT))
 HERE = Path(__file__).resolve().parent; sys.path.insert(0, str(HERE))
 from serve_feats import P10, KSTAR, CHAMP, KUPD
+# Output bounds: speed 6 to 120.75 km/h, flow at least 50 veh/h.
 SPEED_FLOOR, SPEED_CAP, FLOW_FLOOR = 6.0, 120.74999999999999, 50.0
+# k* settings chosen before the held-out check: per-panel alpha and precision weights.
 SEL = json.load(open(ROOT / 'build/strongest_candidate_20260922/state/transfer/selection_before_held.json'))
 
 
 def kstar(v, q, khat, lanes, alpha, weights):
     """= scripts/audit_strongest_state_20260922.apply(family='joint_aux') (copied; identity-checked below)."""
+    # Args: v (km/h), q (veh/h), khat: auxiliary density estimate (veh/km), lanes, alpha: weight of khat,
+    # weights: 'speed_precision' and 'flow_lane_precision'.
+    # The target density mixes q/v with khat; the speed is then the precision-weighted least-squares fit of
+    # (v, q) to that density, and the flow is density x speed. Returns (speed, flow).
     basek = q / v
     kk = np.maximum((1 - alpha) * basek + alpha * khat, 0)
     wv = weights['speed_precision']; wq = weights['flow_lane_precision'] / np.square(lanes)
@@ -27,6 +41,7 @@ def kstar(v, q, khat, lanes, alpha, weights):
 
 
 def main():
+    """Applies the residual model to every non-hole Task 1 row and writes the rows that change."""
     ap = argparse.ArgumentParser(); ap.add_argument('--model', required=True); ap.add_argument('--out', default='rl_state_rows.parquet')
     ap.add_argument('--fallback-model', default=''); ap.add_argument('--fallback-panels', nargs='*', default=[])
     a = ap.parse_args(); t0 = time.time(); md = HERE / a.model
@@ -34,6 +49,7 @@ def main():
     assert not out.exists(), f'refusing to overwrite {out}'
 
     def load_model(d):
+        """Returns (feature list, speed residual booster, per-lane flow residual booster) of a model folder."""
         return json.load(open(d / 'feats.json')), lgb.Booster(model_file=str(d / 'y_v.txt')), lgb.Booster(model_file=str(d / 'y_q.txt'))
     M = {'main': load_model(md)}
     if a.fallback_model: M['fb'] = load_model(HERE / a.fallback_model)   # e.g. RL on the panels without co-switching blocks
@@ -44,9 +60,11 @@ def main():
         for panel in P10:
             feats, mv, mq = M['fb'] if panel in a.fallback_panels else M['main']
             T = pd.read_parquet(HERE / 'feats' / f'serve_{panel}_{split}.parquet')
+            # RL uses the 106 rlfeat features; a longer list means RLB, which adds the block feature table.
             if len(feats) > 106: T = pd.concat([T, pd.read_parquet(HERE / 'feats' / f'blk_serve_{panel}_{split}.parquet')], axis=1)
             pv = mv.predict(T[feats], num_threads=3); pq = mq.predict(T[feats], num_threads=3)
             ln = T.lane_n.to_numpy(float); c1v = T.c1_v.to_numpy(float); c1q = T.c1_q.to_numpy(float)
+            # Residuals are added to C1; the flow residual is per lane.
             v = np.clip(c1v + pv, SPEED_FLOOR, SPEED_CAP); q = np.maximum((c1q / ln + pq) * ln, FLOW_FLOOR)
             ch = champ.reindex(T.submission_id.to_numpy()); cv = ch.speed_kmh.to_numpy(); cq = ch.flow_vph.to_numpy()
             ident = np.nan

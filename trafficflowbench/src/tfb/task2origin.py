@@ -39,6 +39,15 @@ import pandas as pd
 
 from . import release as R
 
+# Role: runs in the reproduction pipeline. task2infer.features_for_split
+# (origin_obs=True) calls from_masked for every validation and private
+# window. Time rule: the masked layer is read at the stamp T only; the T-5
+# values come from the window history.
+# COLUMNS: speed-visible mask at T; speed, flow and occupancy at T; margin
+# (speed / v_cut) and queued flag at T; changes from T-5 to T; margin of the
+# upstream and downstream neighbour at T; corridor shares of visible and of
+# queued links; summed attached ramp flow at T with its mask and its change
+# from T-5.
 COLUMNS = ("origin_obs_mask", "origin_speed_T", "origin_flow_T", "origin_occ_T",
            "origin_margin_T", "origin_queued_T", "origin_dspeed", "origin_dflow",
            "origin_docc", "origin_margin_T_up1", "origin_margin_T_dn1",
@@ -49,6 +58,9 @@ COLUMNS = ("origin_obs_mask", "origin_speed_T", "origin_flow_T", "origin_occ_T",
 @functools.lru_cache(maxsize=64)
 def masked_day(panel: str, split: str, date: str) -> tuple:
     """(link_id -> row, timestamp -> col, V, Q, O) from the MASKED layer."""
+    # Returns None when the split has no masked file for `date`. Speeds are
+    # km/h and flows veh/h; masked cells are NaN. Links keep their order of
+    # first appearance; timestamp keys are normalised to tz-aware UTC by _utc.
     stem = f"synthetic_mainline_{date.replace('-', '_')}.parquet"
     paths = [p for r in R.REGIME_ORDER for p in R.masked_files(panel, split, r)
              if p.name == stem]
@@ -66,6 +78,7 @@ def masked_day(panel: str, split: str, date: str) -> tuple:
     n = (len(links), len(times))
 
     def lay(col):
+        """Returns column ``col`` as a NaN-filled (link x stamp) float array."""
         g = np.full(n, np.nan)
         g[r, c] = pd.to_numeric(f[col], errors="coerce").to_numpy()
         return g
@@ -91,6 +104,10 @@ def _utc(t) -> pd.Timestamp:
 
 
 def _neighbour(a: np.ndarray, k: int) -> np.ndarray:
+    """Returns ``a`` shifted by ``k`` links, NaN-filled; row i holds row i-k.
+
+    Same behaviour as task2feat.shift_rows.
+    """
     out = np.full_like(a, np.nan)
     if k > 0:
         out[k:] = a[:-k]
@@ -104,6 +121,12 @@ def _neighbour(a: np.ndarray, k: int) -> np.ndarray:
 def origin_columns(links, order_links, v_T, q_T, o_T, vcut,
                    v_prev, q_prev, o_prev, ramp_T, ramp_prev, sgn: int = 1) -> dict:
     """Assemble the origin-T block from already-extracted vectors."""
+    # v_T, q_T, o_T: speed, flow and occupancy at T (NaN where masked).
+    # v_prev, q_prev, o_prev: the same at T-5. ramp_T, ramp_prev: summed
+    # attached ramp flow at T and T-5. vcut: per-link queue threshold (km/h).
+    # sgn: +1 when traffic moves toward increasing milepost. `links` and
+    # `order_links` are accepted for the signature only.
+    # Returns the COLUMNS as float64 arrays.
     obs = np.isfinite(v_T).astype(np.float32)
     with np.errstate(invalid="ignore"):
         margin = v_T / vcut
@@ -140,6 +163,9 @@ def from_masked(panel: str, split: str, date: str, links: list[str], times,
     is the window_history at serving and the truth day in training -- the two
     were matched cell for cell by the parity audit.
     """
+    # `times` lists the window's stamps with T at position `t`; the T column
+    # is looked up by timestamp in the masked day. Speed, flow and occupancy
+    # at T are all NaN when the day file or the stamp is missing.
     md = masked_day(panel, split, str(date))
     n = len(links)
     nan = np.full(n, np.nan)

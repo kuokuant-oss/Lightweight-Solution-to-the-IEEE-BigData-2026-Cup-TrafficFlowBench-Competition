@@ -49,6 +49,17 @@ Adoption and rejection follow the deployment comparison only.
 min_size stays at 1 throughout: adding a second knob would stop this being a
 single-factor comparison.
 """
+#
+# Role in the package: a research record. It is the shared harness of the
+# paired Task 2 ablations (a control arm against a candidate arm, both
+# retrained out of fold); no program in this package imports it.
+#
+# Terms: OOF = out-of-fold. S_queue is the Task 2 score: per-window IoU
+# averaged window -> (panel, condition) -> panel -> family with equal weights
+# (score2.aggregate). "thrcal" is the threshold-calibration date block. The
+# quoted rule in the docstring reads "knobs are chosen on calib only; results
+# are reported on eval". scripts/NN, doc/... and the ledger are development
+# records that are not part of this package.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -59,6 +70,8 @@ import pandas as pd
 
 from . import release as R, score2, task2eval as TE, task2oof as OOF, task2prior as PR
 
+# Shares of each fold's source dates used for early stopping and for
+# threshold selection; the rest (FIT_FRACTION) fits the trees.
 ES_FRACTION = 0.15
 THRCAL_FRACTION = 0.15
 # scripts/93: threshold selection on 13 days moves a RETRAINED candidate's paired
@@ -70,12 +83,16 @@ THRCAL_FRACTION = 0.15
 # at least this many dates.
 MIN_THR_DATES = 26
 FIT_FRACTION = 1.0 - ES_FRACTION - THRCAL_FRACTION
+# Smallest predicted component the decision rule keeps; 1 keeps every one.
 MIN_SIZE = 1
+# Candidate thresholds 0.05, 0.075, ..., 0.95 for the per-condition sweep.
 THR_GRID = np.round(np.arange(0.05, 0.96, 0.025), 3)
+# Config of the frozen first-submission Task 2 model, with its thresholds.
 FROZEN_CFG = R.REPO / "build" / "submission_v1" / "frozen" / "task2_model" / "config.csv"
 
 
 def frozen_thresholds() -> dict[str, float]:
+    """Reads the frozen model's per-condition thresholds from FROZEN_CFG."""
     cfg = pd.read_csv(FROZEN_CFG, index_col=0).iloc[:, 0]
     return {"queue_onset": float(cfg["thr_queue_onset"]),
             "queue_ongoing": float(cfg["thr_queue_ongoing"])}
@@ -83,6 +100,8 @@ def frozen_thresholds() -> dict[str, float]:
 
 def nested_split(source_dates: list[str]) -> tuple[list[str], list[str], list[str]]:
     """fit / es / thrcal, time-ordered and disjoint. See the module docstring."""
+    # Returns three sorted date lists cut at rounded shares of the date
+    # count; an empty block raises RuntimeError.
     src = sorted(source_dates)
     n = len(src)
     i_es = int(round(n * FIT_FRACTION))
@@ -94,6 +113,11 @@ def nested_split(source_dates: list[str]) -> tuple[list[str], list[str], list[st
 
 
 def default_prior(d: pd.DataFrame, src: set[str], panels: list[str]) -> np.ndarray:
+    """Returns the legacy queue prior for every row of d.
+
+    The prior is the plain per-(link, time of day) queue rate over the dates
+    in src (task2oof.panel_prior), looked up at each row's cell.
+    """
     return OOF.apply_prior(d, {p: OOF.panel_prior(p, src) for p in panels})
 
 
@@ -105,7 +129,12 @@ def make_fitter(objective=None, feval=None):
     ``feval`` is supplied the built-in metric is switched off, so stopping is
     driven by that metric alone in every arm that uses it.
     """
+    # objective replaces PARAMS' objective (and drops its built-in metric);
+    # feval is a custom metric passed to lgb.train. Training otherwise matches
+    # task2oof.fit_fold: same parameters, "cells" window weights and
+    # logit(queue_prior) as init_score.
     def fit(train: pd.DataFrame, valid: pd.DataFrame, feats: list[str]):
+        """Trains on train with early stopping on valid; returns (model, best_iter)."""
         import lightgbm as lgb
         P = dict(OOF.PARAMS)
         if objective is not None:
@@ -134,6 +163,9 @@ class Arm:
     what a condition-specific feature table means. When it is None both
     conditions use ``feats``.
     """
+    # label: arm name in logs; feats: feature columns; fitter, prior and
+    # predictor: the training, prior and prediction functions (the defaults
+    # reproduce the control); meta: free-form notes carried with the arm.
     label: str
     feats: list[str]
     feats_by_cond: dict[str, list[str]] | None = None
@@ -203,6 +235,13 @@ def run_arm(d: pd.DataFrame, arm: Arm, fold_of: dict[str, int], dates: list[str]
     comparison single-factor -- dropping them would score the conditional head
     on a sixth as many cells and flatter it.
     """
+    # Args not covered above: d is the feature table (task2oof.base_features
+    # rows with fold and date columns); fold_of maps date -> held-out fold;
+    # dates are all source dates; extra_cols are copied into the output;
+    # per_fold_features(k, fit_dates, es_dates) rebuilds fold-dependent
+    # features. Returns the OOF frame (prob = held-out probability, 0 where a
+    # condition was not fitted) with calib, iters, importance, prior_specs and
+    # prior_mode in .attrs.
     keep = ["window_id", "panel", "condition", "date", "fold", "link_id", "step", "label"]
     keep = keep + [c for c in extra_cols if c not in keep]
     n_rows = len(d)
@@ -327,6 +366,8 @@ def calibrated_thresholds(arm_oof: pd.DataFrame, n_folds: int = 5) -> pd.DataFra
 
 def frame_with(arm_oof: pd.DataFrame, thr, per_fold: bool = False) -> pd.DataFrame:
     """Decision frame. ``thr`` is one dict, or a per-fold threshold table."""
+    # Returns the per-window IoU frame (task2eval.iou_frame) with date and
+    # fold columns added.
     if not per_fold:
         pred = TE.decide(arm_oof, thr, MIN_SIZE)
     else:
@@ -346,8 +387,17 @@ def frame_with(arm_oof: pd.DataFrame, thr, per_fold: bool = False) -> pd.DataFra
 
 
 def subgroup_deltas(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
+    """Returns control, candidate and delta S_queue per subgroup.
+
+    Subgroups are overall, each condition, each panel and each fold.
+
+    Args:
+        a: Per-window IoU frame of the control arm (frame_with output).
+        b: The same windows for the candidate arm.
+    """
     rows = []
     def add(name, fa, fb):
+        """Appends one subgroup row; skips an empty subgroup."""
         if fa.empty:
             return
         rows.append({"subgroup": name, "n_windows": fa.window_id.nunique(),
@@ -366,6 +416,8 @@ def subgroup_deltas(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
 def compare(a_oof: pd.DataFrame, b_oof: pd.DataFrame, seed: int, n_boot: int = 2000,
             n_folds: int = 5) -> dict:
     """Both readings: frozen-threshold diagnostic, and deployment comparison."""
+    # a_oof / b_oof: run_arm outputs of the control and candidate arms on the
+    # same rows. The bootstrap resamples dates (task2eval.paired_bootstrap).
     fz = frozen_thresholds()
     out = {"frozen_thresholds": fz}
     fa, fb = frame_with(a_oof, fz), frame_with(b_oof, fz)
@@ -386,6 +438,7 @@ def compare(a_oof: pd.DataFrame, b_oof: pd.DataFrame, seed: int, n_boot: int = 2
 
 
 def report(res: dict, title: str) -> None:
+    """Prints a compare() result: threshold shift, subgroup deltas, bootstrap CIs."""
     print(f"\n=== {title}: threshold shift ===")
     print("  control  :", res["deployment"]["thresholds_control"].to_string(index=False))
     print("  candidate:", res["deployment"]["thresholds_candidate"].to_string(index=False))
@@ -416,6 +469,7 @@ DEAD_CELL = ("D7_I10_W", "queue_ongoing")
 
 
 def drop_dead_cell(frame: pd.DataFrame) -> pd.DataFrame:
+    """Returns frame without the rows of DEAD_CELL (D7_I10_W, queue_ongoing)."""
     panel, cond = DEAD_CELL
     return frame[~((frame.panel == panel) & (frame.condition == cond))]
 
@@ -450,6 +504,8 @@ def dead_cell_report(res: dict, title: str) -> dict[str, float]:
     print(f"  deployment delta, as the ledger records it : {out['with_dead']:+.6f}")
     print(f"  deployment delta, dead cell removed        : {out['without_dead']:+.6f}"
           f"   (shift {out['shift']:+.6f})")
+    # Fixed reference deltas of earlier ablations (labelled by script number)
+    # and the no-op floor, printed for comparison.
     print("  ranking reference, dead cell removed: "
           "103A_D +0.009095, 100 +0.008421, 73 +0.007248, 99 +0.007227, 87 +0.005863, 88 +0.005724, 83 +0.005257, 97 +0.003326, 101b +0.003288, 96b +0.002794, 98 +0.000486; no-op floor 0.000787")
     return out
@@ -459,6 +515,8 @@ def save_artifacts(out_dir, slug: str, a_oof: pd.DataFrame, b_oof: pd.DataFrame,
                    res: dict) -> dict[str, str]:
     """Raw probabilities, chosen thresholds and per-window IoU, so a later check
     does not require retraining."""
+    # out_dir: a pathlib.Path; slug prefixes the three file names. Returns the
+    # SHA256 of each written file, plus their paths under "_paths".
     from . import prov
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = {}

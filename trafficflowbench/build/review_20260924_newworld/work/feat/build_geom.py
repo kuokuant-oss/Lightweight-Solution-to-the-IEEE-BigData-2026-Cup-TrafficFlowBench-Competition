@@ -1,4 +1,13 @@
 """Geometry features for train replicated windows (mode=train <cond>) or serve windows (mode=serve <root> <split> <tag>)."""
+# Role: `serve` mode runs in the reproduction (`pipeline/ongoing.sh`, steps
+# nw_geom_val and nw_geom_pri). It writes geom_serve_<tag>.parquet next to this
+# file: one row per (official window, link, step 1..6) with the geom.py
+# features, read by ogens_serve.py. `train` mode builds the same features for
+# the replicated train windows (geom_train_<condition>.parquet) and is the
+# training record of the A ensemble.
+#
+# Usage: build_geom.py serve <release root> <split> <tag>
+#        build_geom.py train <condition>
 import sys, numpy as np, pandas as pd
 from pathlib import Path
 ROOT = Path('/Volumes/Crucial X9/trafficflow/trafficflowbench'); sys.path.insert(0, str(ROOT))
@@ -9,12 +18,28 @@ import geom as G
 
 
 def static(panel, links):
+    """Returns the queue speed threshold and length of each link.
+
+    Args:
+      panel: corridor name, e.g. 'D7_I210_W'.
+      links: link ids in milepost order.
+
+    Returns:
+      (vcut, length_km) float arrays: the released v_cut (else 0.6 x free-flow
+      speed; 63.0 km/h for a link without either) and the length from
+      fd_parameters.csv (0.3 km when missing).
+    """
     fd = pd.read_csv(R.RELEASE / 'corridors' / panel / 'network' / 'fd_parameters.csv', dtype={'link_id': str}).set_index('link_id')
     cut = score2.v_cut(panel)
     return np.array([cut.get(k, 63.0) for k in links]), fd.length_km.reindex(links).fillna(0.3).to_numpy(float)
 
 
 def train(cond):
+    """Writes geometry features for the replicated train windows of one condition.
+
+    Args:
+      cond: 'queue_onset' or 'queue_ongoing'.
+    """
     u = pd.read_parquet(ROOT / 'build/review_20260923/work/e2/replicated_unique.parquet')
     u = u[u.condition == cond]
     out = []
@@ -24,6 +49,7 @@ def train(cond):
             links, mp, V, Qf, O, E, Q, times = TB.day_arrays(panel, by[date], cut)
             vc, ln = static(panel, links)
             for w in wd.itertuples():
+                # Window origin t: the history is stamps t-12 .. t-1 of the day.
                 t = int(w.origin)
                 f = G.step_frame(links, G.geom_features(V[:, t - 12:t], Qf[:, t - 12:t], E[:, t - 12:t], vc, ln))
                 f['window_id'] = f'{panel}|{date}|{t}'; out.append(f)
@@ -34,12 +60,23 @@ def train(cond):
 
 
 def serve(root, split, tag):
+    """Writes geometry features for every official window of a split.
+
+    Reads only each window's released history (window_history.parquet, the
+    12 stamps before T) and static network files, so nothing after T enters.
+
+    Args:
+      root: release folder (kaggle_public).
+      split: 'validation' or 'private'.
+      tag: output name part, e.g. 'realval' or 'realpriv'.
+    """
     R.RELEASE = Path(root)
     wi = score2.window_index(split)
     out = []
     for panel in sorted(wi.panel.unique()):
         hist = pd.read_parquet(R.RELEASE / 'task2' / panel / split / 'window_history.parquet')
         hist['link_id'] = hist.link_id.astype(str)
+        # Link order: milepost of the panel's first train day (2030-06-01).
         truth_mp = pd.read_parquet(R.truth_files(panel, 'train')[0], columns=['link_id', 'milepost']).drop_duplicates()
         truth_mp['link_id'] = truth_mp.link_id.astype(str)
         for wid, h in hist.groupby('window_id'):

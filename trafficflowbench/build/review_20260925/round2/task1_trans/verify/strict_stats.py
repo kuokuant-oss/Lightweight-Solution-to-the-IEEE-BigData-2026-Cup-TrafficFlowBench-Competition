@@ -4,6 +4,10 @@ A-day row, all A days otherwise); _fB likewise over even days.  Fitting on A and
 no observation from a test-half day enters any feature of the fit rows or the test rows.
 Harness check first: the same code over ALL days with leave-own-day-out must reproduce the stored s_* columns exactly.
 Usage: strict_stats.py <validation|train_r2> [panels...]  -> verify/work/strict_<split>_<panel>.parquet"""
+# Task 1 reproduction pipeline, step 7 (`pipeline/task1.sh`, log
+# `strict_validation`). The strict columns feed the strict odd/even HM25 heads
+# (review_20260927/iteration2/hole_mixture_ldo.py --strict) that the HMP50
+# step uses.
 import os, sys
 sys.dont_write_bytecode = True
 os.environ.setdefault('OMP_NUM_THREADS', '3')
@@ -14,10 +18,20 @@ import build_ph as B
 from build_ph import physics, block_ids, LG
 from tstats import SplitStats
 PW = HERE.parent / 'work'
+# RAWC: split statistics at the cell; stats_at adds the pre/post columns.
 RAWC = ['s_v', 's_ql', 's_qf', 's_n', 's_vq', 's_tq', 's_bqf']
 
 
 def stats_at(st, li, cc, pre, post):
+    """Returns the split statistics of rows at their cell and around the hole.
+
+    Args:
+      st: dict of (L, T) arrays from SplitStats.loo.
+      li: link index per row.
+      cc: slot of the cell per row.
+      pre: last history slot (T) per row.
+      post: first slot after the hole (T+1+LG) per row.
+    """
     o = {k: st[k][li, cc] for k in RAWC}
     for k, c_ in (('pre', pre), ('post', post)):
         o[f's_v_{k}'] = st['s_v'][li, c_]; o[f's_qf_{k}'] = st['s_qf'][li, c_]; o[f's_bqf_{k}'] = st['s_bqf'][li, c_]
@@ -25,6 +39,7 @@ def stats_at(st, li, cc, pre, post):
 
 
 def main():
+    """Writes the strict half-only statistics of every pseudo-hole row, per panel."""
     split = sys.argv[1]; panels = sys.argv[2:] or B.PANELS
     for panel in panels:
         D = pd.read_parquet(PW / f'ph_{split}_{panel}.parquet', columns=['panel', 'date', 'day', 'origin', 'li', 'step_i'] + RAWC +
@@ -47,6 +62,9 @@ def main():
         print(panel, 'harness max |diff| vs stored s_* columns', mx, flush=True)
         out = {'panel': D.panel.to_numpy(), 'li': D.li.to_numpy(), 'origin': D.origin.to_numpy(), 'step_i': D.step_i.to_numpy()}
         dayno = np.array([int(d[8:10]) for d in dates])
+        # Half A = odd calendar days, half B = even. An all-NaN dummy day is
+        # appended: rows from the other half take loo(dummy), which removes
+        # nothing, so they see every day of this half.
         for h, par_ in (('A', 1), ('B', 0)):
             idx = np.where(dayno % 2 == par_)[0]
             nanday = np.full((1,) + Vs.shape[1:], np.nan)

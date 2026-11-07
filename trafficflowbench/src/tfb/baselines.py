@@ -6,6 +6,20 @@ Nothing here is invented: every method points at the note it came from.
   B2 ASM               notes/01 A, Treiber/Kesting/Wilson arXiv:0909.4467  [文獻]
   B3 LRTC-TNN          notes/08 B, transdim imputer/LRTC-TNN.ipynb         [文獻]
 """
+#
+# Role in the package: the Task 1 reproduction pipeline (pipeline/task1.sh,
+# steps 1 and 2) calls lrtc_tnn directly, and two_axis runs inside
+# task1stack.members. asm (B2) is not called by any program in this package.
+#
+# Names in the docstring above: B0..B3 are the family codes that
+# predict1.METHODS also uses. The bracketed tags give the kind of source:
+# [官方] the organizers' starter code, [選手] a public competitor's feature
+# recipe, [文獻] a published paper or its reference code. "notes/NN X" and
+# "doc/..." point to the team's development notes, which are not part of this
+# package. The historical mean (B0) is computed in predict1.historical_mean.
+#
+# lrtc_tnn and its three helpers are copied from Xinyu Chen's transdim project
+# (imputer/LRTC-TNN.ipynb, MIT licence; see THIRD_PARTY_NOTICES.md).
 from __future__ import annotations
 
 import numpy as np
@@ -16,6 +30,11 @@ DT_H = 5.0 / 60.0  # 5-minute grid, in hours
 # ---------------------------------------------------------------- B1 interp
 def interp_axis(value: np.ndarray, coord: np.ndarray, axis: int) -> np.ndarray:
     """Linear interpolation along one axis over the observed cells, edges held flat."""
+    # value is a (link x time) grid with NaN at unobserved cells. axis=0
+    # interpolates each time column across links at positions `coord`
+    # (mileposts, km); axis=1 interpolates each link's row in time (`coord` =
+    # step index). np.interp holds the nearest observed value beyond the first
+    # and last observation; a line with no observation at all stays NaN.
     v = value if axis == 0 else value.T
     x = coord
     out = np.full_like(v, np.nan)
@@ -30,6 +49,9 @@ def interp_axis(value: np.ndarray, coord: np.ndarray, axis: int) -> np.ndarray:
 
 def two_axis(value: np.ndarray, milepost: np.ndarray) -> dict[str, np.ndarray]:
     """notes/01 D: `spat_*` interpolates along space, `temp_*` along time."""
+    # value: (link x time) grid with NaN at unobserved cells; milepost: link
+    # positions in km, ascending. Returns three (link x time) fills: "spatial",
+    # "temporal", and "mean", their cell-wise average (NaN only where both are).
     t_index = np.arange(value.shape[1], dtype=float)
     spat = interp_axis(value, milepost, axis=0)
     temp = interp_axis(value, t_index, axis=1)
@@ -49,6 +71,11 @@ def _asm_field(value: np.ndarray, observed: np.ndarray, milepost: np.ndarray,
     0.01-3.08 km, so an index-based kernel would be a different method.
     Truncated at n_sigma decay lengths in both arguments (weight < e^-4).
     """
+    # value / observed: (link x time) grid and its observed mask; milepost in
+    # km. sigma (km) and tau (h) are the kernel decay lengths and c_kmh the
+    # speed of the characteristic: positive for free-flow information carried
+    # downstream, negative for congested waves carried upstream. Returns the
+    # smoothed field, NaN where no observation lies inside the truncated kernel.
     nL, nT = value.shape
     v = np.where(observed, np.nan_to_num(value), 0.0)
     m = observed.astype(float)
@@ -63,6 +90,8 @@ def _asm_field(value: np.ndarray, observed: np.ndarray, milepost: np.ndarray,
     max_shift_h = (n_sigma * sigma) / abs(c_kmh)
     max_u = int(np.ceil((n_sigma * tau + max_shift_h) / DT_H))
 
+    # Sum the kernel over every link offset d (source row = target row + d)
+    # and time offset u (in 5-minute steps), shifting whole slices at once.
     for d in range(-max_d, max_d + 1):
         lo_t, hi_t = max(0, -d), min(nL, nL - d)       # target rows
         src = slice(lo_t + d, hi_t + d)                # source rows
@@ -99,6 +128,10 @@ def asm(speed: np.ndarray, observed: np.ndarray, milepost: np.ndarray,
     w on the velocity fields -- "use alternative data in the linear formulae
     but retain unchanged the dependence on velocity in the nonlinear component".
     """
+    # speed: (link x time) speed grid, km/h; observed: its observed mask;
+    # milepost: link positions, km. sigma defaults to half the median link
+    # spacing and tau to half a 5-minute step. Returns {"speed_kmh": field}
+    # plus one smoothed field per entry of `other`, all (link x time).
     spacing = np.diff(milepost)
     if sigma is None:
         sigma = float(np.median(spacing)) / 2.0 if len(spacing) else 0.5
@@ -112,10 +145,13 @@ def asm(speed: np.ndarray, observed: np.ndarray, milepost: np.ndarray,
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             vmin = np.nanmin(both, axis=0)
+    # Congestion weight from the slower of the two velocity fields: close to 1
+    # below v_thr (congested regime), close to 0 above it, over a width of dv.
     w = 0.5 * (1.0 + np.tanh((v_thr - vmin) / dv))
     w = np.where(np.isfinite(vmin), w, np.nan)
 
     def blend(free, cong):
+        """Returns w * cong + (1 - w) * free, falling back to the finite field."""
         out = w * cong + (1.0 - w) * free
         out = np.where(np.isfinite(out), out, np.where(np.isfinite(free), free, cong))
         return out
@@ -130,15 +166,33 @@ def asm(speed: np.ndarray, observed: np.ndarray, milepost: np.ndarray,
 
 # ---------------------------------------------------------------- B3 LRTC-TNN
 def _ten2mat(tensor, mode):
+    """Unfolds a tensor along `mode` into a matrix (Fortran order, as transdim)."""
     return np.reshape(np.moveaxis(tensor, mode, 0), (tensor.shape[mode], -1), order="F")
 
 
 def _mat2ten(mat, tensor_size, mode):
+    """Folds a mode unfolding back to shape `tensor_size`; inverse of _ten2mat."""
     index = [mode] + [i for i in range(tensor_size.shape[0]) if i != mode]
     return np.moveaxis(np.reshape(mat, list(tensor_size[index]), order="F"), 0, mode)
 
 
 def _svt_tnn(mat, alpha, rho, theta):
+    """Applies singular value thresholding for the truncated nuclear norm.
+
+    Keeps only singular values above tau = alpha / rho; the largest `theta`
+    of them stay unchanged and the rest are reduced by tau. A wide matrix
+    (2m < n) is decomposed through its m x m Gram matrix and a tall one
+    (m > 2n) through its transpose, which is cheaper than a full SVD.
+
+    Args:
+        mat: Matrix to threshold (one tensor unfolding).
+        alpha: Weight of this unfolding in the objective.
+        rho: Current ADMM penalty parameter.
+        theta: Number of leading singular values left unshrunk.
+
+    Returns:
+        The thresholded matrix, same shape as `mat`.
+    """
     tau = alpha / rho
     m, n = mat.shape
     if 2 * m < n:
@@ -160,6 +214,14 @@ def _svt_tnn(mat, alpha, rho, theta):
 
 def lrtc_tnn(sparse_tensor, alpha=None, rho=1e-5, theta=0.25, epsilon=1e-4, maxiter=100):
     """transdim imputer/LRTC-TNN.ipynb, verbatim. Missing entries are 0, not NaN."""
+    # sparse_tensor: (link x time x day) array, 0 at missing cells; an observed
+    # value equal to 0 also counts as missing. alpha: weights of the three
+    # unfoldings (default 1/3 each). rho: starting ADMM penalty, raised 5% per
+    # iteration up to 1e5. theta: share of each mode's size whose leading
+    # singular values stay unshrunk. Stops when the relative change of the
+    # estimate falls below epsilon, or after maxiter iterations. Returns the
+    # low-rank estimate for every cell; observed cells are not reset to their
+    # input values.
     alpha = np.ones(3) / 3 if alpha is None else np.asarray(alpha, dtype=float)
     dim = np.array(sparse_tensor.shape)
     pos_missing = np.where(sparse_tensor == 0)
@@ -171,6 +233,8 @@ def lrtc_tnn(sparse_tensor, alpha=None, rho=1e-5, theta=0.25, epsilon=1e-4, maxi
     it = 0
     while True:
         rho = min(rho * 1.05, 1e5)
+        # ADMM step: low-rank update of each mode unfolding, then fill the
+        # missing cells of Z with the average estimate, then the dual update.
         for k in range(len(dim)):
             X[k] = _mat2ten(_svt_tnn(_ten2mat(Z - T[k] / rho, k), alpha[k], rho,
                                      int(np.ceil(theta * dim[k]))), dim, k)

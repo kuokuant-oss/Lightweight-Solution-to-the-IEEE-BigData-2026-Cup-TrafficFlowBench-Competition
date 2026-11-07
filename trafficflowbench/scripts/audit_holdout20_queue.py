@@ -4,8 +4,22 @@ The canonical design MUST exist before any fitting. Neither previously shipped
 booster is used for predictions: both saw dates in this holdout. Full query grids
 are decoded before the hidden eligibility mask is applied to score either arm.
 """
+
+# Role: research audit of the Task 2 models, kept as a record; the
+# reproduction pipeline does not run it, but the onset audits import its
+# helpers (decode, frame, calibrate, apply_prior).
+# The train days are split once (design.json under BASE): 218 development days
+# (fit, early-stopping and calibration blocks) and the following 55 days as
+# holdout. Two recipes are refit on development days only and scored on the
+# holdout: the earlier "champion" (50 features, prior as offset, both
+# conditions) and the onset "candidate" of scripts/145 (75 features with
+# hazard columns, step 6 only, ongoing rows taken from the champion).
+# Outputs in BASE/queue: features, models, predictions, manifest.json and
+# results.json (S_queue per arm and paired deltas).
+
 from __future__ import annotations
 import os
+# Pin the BLAS / OpenMP thread pools to 4 before numpy and LightGBM load.
 for _k in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','VECLIB_MAXIMUM_THREADS'):
     os.environ[_k] = '4'
 import gc, hashlib, importlib.util, json, sys, time
@@ -18,8 +32,12 @@ from threadpoolctl import threadpool_limits
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from src.tfb import task2oof as OOF, task2prior as PR, task2eval as TE
+# M: scripts/145 loaded as a module (Hazard, identity, predictions, PARAMS, GRID).
 _spec = importlib.util.spec_from_file_location('prior145', ROOT/'scripts/145_onset_prior_forward.py')
 M = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(M)
+# BASE: the fixed-holdout design folder. KEY: identity, label and eligibility
+# columns saved with predictions; STABLE_KEY: the unique cell key. CHAMP_THR:
+# the champion's shipped decision thresholds per condition.
 BASE = ROOT/'build/fixed_holdout20_20260922'
 OUT = BASE/'queue'
 KEY = ['window_id','panel','date','condition','link_id','step','label','_eligible']
@@ -28,6 +46,7 @@ CHAMP_THR = {'queue_onset':.20, 'queue_ongoing':.675}
 
 
 def sha(path):
+    """Returns the SHA-256 hex digest of a file, read in 8 MiB blocks."""
     h=hashlib.sha256()
     with Path(path).open('rb') as f:
         for b in iter(lambda:f.read(8*1024*1024),b''):h.update(b)
@@ -35,10 +54,24 @@ def sha(path):
 
 
 def dump(name,obj):
+    """Writes `obj` as indented UTF-8 JSON to OUT/name."""
     (OUT/name).write_text(json.dumps(obj,indent=2,ensure_ascii=False)+'\n')
 
 
 def features(w, name, origin=False, full=False, step6=False):
+    """Builds (or loads the cached) train Task 2 features for a set of windows.
+
+    Args:
+        w: windows (panel, date, origin, condition).
+        name: cache name; the table is stored as OUT/<name>_features.parquet.
+        origin: add the clock and origin-time observation features (the
+            scripts/145 feature set).
+        full: keep score-ineligible cells too (the full link grid).
+        step6: keep only step 6 (T+30) rows.
+
+    Returns:
+        One row per (window, link, step) with features and label.
+    """
     path=OUT/f'{name}_features.parquet'
     if path.exists():return pd.read_parquet(path)
     parts=[]
@@ -55,6 +88,8 @@ def features(w, name, origin=False, full=False, step6=False):
 
 def apply_prior(ds, dates, panels):
     """Retain only one panel's daily count matrices at a time."""
+    # Sets `queue_prior` in every table of `ds` from the labels of `dates`; rows
+    # dated on one of `dates` read leave-one-day-out values (task2prior).
     for d in ds:d['queue_prior']=np.float32(0)
     for panel in panels:
         p=PR.build([panel],PR.PriorSpec(tuple(dates)))
@@ -65,6 +100,21 @@ def apply_prior(ds, dates, panels):
 
 
 def decode(d, prob, thresholds):
+    """Turns probabilities into 0/1 queue decisions per cell.
+
+    Each condition uses its threshold from `thresholds`; rows of a condition
+    not in `thresholds` stay 0. Onset rows are decided at step 6 only (steps
+    1-5 stay free) and every onset window gets at least its most probable
+    step-6 cell.
+
+    Args:
+        d: rows with condition, step and window_id.
+        prob: probability per row.
+        thresholds: condition -> threshold.
+
+    Returns:
+        Boolean decision per row of `d`.
+    """
     y=np.asarray(prob)>=d.condition.map(thresholds).to_numpy()
     onset=d.condition.eq('queue_onset').to_numpy()
     y[onset & d.step.ne(6).to_numpy()]=False
@@ -76,6 +126,16 @@ def decode(d, prob, thresholds):
 
 
 def frame(d, pred, step6=False, official_pattern=False):
+    """Returns the per-window IoU frame on eligible cells.
+
+    Args:
+        d: rows with label, `_eligible`, condition, step and window_id.
+        pred: decision per row.
+        step6: score onset windows on step 6 only.
+        official_pattern: keep only onset windows whose eligible labels are
+            free at steps 1-5 and queued at step 6 (the pattern of official
+            onset windows).
+    """
     use=d._eligible.to_numpy().copy()
     if step6:use &= d.step.eq(6).to_numpy() | d.condition.ne('queue_onset').to_numpy()
     if official_pattern:
@@ -88,6 +148,11 @@ def frame(d, pred, step6=False, official_pattern=False):
 
 
 def calibrate(d,p,cond,grid):
+    """Picks the threshold of one condition from `grid` by the official-style score on `d`.
+
+    Returns:
+        (best threshold, list of {threshold, score}).
+    """
     rows=[]
     # For the new onset recipe, the only predicted endpoint is its fitting and
     # calibration target. Always include the complete link grid for decoding.
@@ -100,6 +165,7 @@ def calibrate(d,p,cond,grid):
 
 
 def save_predictions(name,d,prob,pred):
+    """Writes KEY columns plus prob and pred to OUT/<name>_predictions.parquet and returns the table."""
     z=d[KEY].copy();z['prob']=prob;z['pred']=np.asarray(pred,dtype=np.int8)
     assert not z.duplicated(STABLE_KEY).any()
     z.attrs={};z.to_parquet(OUT/f'{name}_predictions.parquet',index=False)
@@ -107,9 +173,16 @@ def save_predictions(name,d,prob,pred):
 
 
 def main():
+    """Runs the audit: champion refit per condition, candidate onset refit, paired holdout scoring.
+
+    Raises:
+        SystemExit: design.json is missing (no fitting before the design exists).
+    """
     if not (BASE/'design.json').exists():raise SystemExit('Canonical design missing; no fitting permitted')
     design=json.loads((BASE/'design.json').read_text())
     OUT.mkdir(parents=True,exist_ok=True)
+    # Date roles from the frozen design: development = fit + early stopping +
+    # calibration; holdout = the 55 days after development.
     dates={'development':design['development_dates'],'holdout':design['holdout_dates'],
            'fit':design['queue']['fit_dates'],'early_stopping':design['queue']['es_dates'],
            'calibration':design['queue']['calibration_dates']}
@@ -130,6 +203,8 @@ def main():
     hw.to_csv(OUT/'held_windows.csv',index=False)
     cw=windows[windows.date.isin(cal)]
     dw=windows[windows.date.isin(dev)]
+    # Feature lists: champion (earlier 50-feature recipe) and candidate
+    # (scripts/145 final_feature_hazard, 75 features).
     champmanifest=json.loads((ROOT/'data/interim/m21_task2_recency_corrected/prior_manifest.json').read_text())
     champfeats=champmanifest['features'];assert len(champfeats)==50
     candmanifest=json.loads((ROOT/'build/final_sprint_review_20260922/prior/final_feature_hazard_manifest.json').read_text())
@@ -150,6 +225,8 @@ def main():
         d=features(dw[dw.condition.eq(cond)],f'champion_{cond}_development')
         ca=features(cw[cw.condition.eq(cond)],f'champion_{cond}_calibration_full',full=True)
         ev=features(hw[hw.condition.eq(cond)],f'champion_{cond}_holdout_full',full=True)
+        # Stage A: fit on fit dates with early stopping on ES dates; its
+        # calibrated threshold is kept as a diagnostic arm.
         apply_prior([d,ca],fit,panels)
         tr=d[d.date.isin(fit)].copy();va=d[d.date.isin(es)].copy()
         dt=lgb.Dataset(tr[champfeats],tr.label,weight=OOF.window_weights(tr),init_score=OOF.logit(tr.queue_prior.to_numpy()))
@@ -205,6 +282,7 @@ def main():
     b=cached[cached.date.isin(cal+held)][cols].sort_values(STABLE_KEY).reset_index(drop=True)
     pd.testing.assert_frame_equal(a,b,check_exact=True)
     del a,b;gc.collect()
+    # Prior and hazard tables from fit-date labels only.
     apply_prior([d,query],fit,panels)
     hz=M.Hazard(cached,fit);hz.apply(d);hz.apply(query)
     # Perturb held labels: all candidate query features must remain identical.
@@ -245,6 +323,9 @@ def main():
     pd.testing.assert_frame_equal(candidate.loc[~ons],champion.loc[~ons],check_exact=True)
     for label,z in [('champion',champion),('candidate',candidate),('champion_recalibrated',diagnostic)]:
         z.attrs={};z.to_parquet(OUT/f'{label}_holdout_predictions.parquet',index=False)
+    # Three scorings: all six steps, onset step 6 only, and only onset windows
+    # with the official pattern; each compares champion, candidate and the
+    # recalibrated champion window by window.
     reports={}
     for metric,opts in [('main_all6_eligible',{}),('onset_step6_eligible',{'step6':True}),
                          ('official_pattern_eligible',{'official_pattern':True})]:

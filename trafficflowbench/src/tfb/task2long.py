@@ -27,6 +27,19 @@ import pandas as pd
 
 from . import release as R
 
+# Role: task2infer.features_for_split adds this block only with long=True;
+# the reproduction pipeline serves with long=False, so this is a research
+# block.
+# COLUMNS (lh_ = long history), per link, from masked-layer cells at or before
+# T: mean flow over the last 3 h and over the day so far, mean and maximum
+# occupancy over 3 h, lowest speed so far today and its ratio to v_cut, share
+# of today's observed stamps that were queued, steps since the link was last
+# queued, 3-hour speed slope (km/h per step), observed stamps today, the
+# corridor mean of the queued share, and the recent-day queue rate at this
+# time of day with the number of days behind it.
+# STEPS_3H: 3 hours in 5-minute steps. RECENT_DAYS: earlier in-split days the
+# recent prior looks back over. TOD_HALFWIDTH: slots (5 min each) on either
+# side of T's time of day.
 COLUMNS = ("lh_flow_mean_3h", "lh_flow_mean_day", "lh_occ_mean_3h", "lh_occ_max_3h",
            "lh_minspeed_day", "lh_margin_day", "lh_queued_frac_day", "lh_since_queue",
            "lh_speed_slope_3h", "lh_nobs_day", "lh_corr_queued_frac", "lh_recent_prior",
@@ -34,11 +47,16 @@ COLUMNS = ("lh_flow_mean_3h", "lh_flow_mean_day", "lh_occ_mean_3h", "lh_occ_max_
 STEPS_3H = 36          # 5-minute steps
 RECENT_DAYS = 14       # in-split lookback for the current-realization prior
 TOD_HALFWIDTH = 3      # +/- 15 minutes, so the recent prior has support to estimate on
+# LRU cache of masked day arrays, keyed by (panel, split, date, link count).
 _DAY: "OrderedDict" = __import__("collections").OrderedDict()
 _DAY_MAX = 40          # days held; the recent prior only ever looks back RECENT_DAYS
 
 
 def _masked_path(panel: str, split: str, date: str):
+    """Returns the masked mainline file for ``date``, or None if absent.
+
+    Searches the regime folders in R.REGIME_ORDER (R1, R2, R3) in order.
+    """
     want = "synthetic_mainline_" + date.replace("-", "_") + ".parquet"
     for rg in R.REGIME_ORDER:
         for p in R.masked_files(panel, split, rg):
@@ -49,6 +67,9 @@ def _masked_path(panel: str, split: str, date: str):
 
 def day_arrays(panel: str, split: str, date: str, links: list[str]):
     """(speed, flow, occ, times) on the MASKED layer, aligned to ``links``."""
+    # Arrays are (len(links) x n_stamps), rows in the order of `links`, stamps
+    # as tz-aware UTC; masked or absent cells are NaN. Returns None when the
+    # masked file is missing. Results are kept in the _DAY cache.
     key = (panel, split, date, len(links))
     if key in _DAY:
         _DAY.move_to_end(key)
@@ -78,6 +99,7 @@ def day_arrays(panel: str, split: str, date: str, links: list[str]):
 
 
 def _tod_of(ts) -> int:
+    """Returns the 5-minute time-of-day slot (0..287) of ``ts``."""
     t = pd.Timestamp(ts)
     return t.hour * 12 + t.minute // 5
 
@@ -92,6 +114,10 @@ def _recent_prior(panel: str, split: str, date: str, links: list[str], vcut: np.
     from new random seeds (notes/22 same announcement), and an ablation measured
     onset skill as 41.6% location memory (doc/plan/baseline-v3.md Z11).
     """
+    # Reads masked-layer speeds of up to RECENT_DAYS earlier dates of the same
+    # split, within TOD_HALFWIDTH slots of `tod`. Returns (per-link share of
+    # observed cells that were queued, NaN where fewer than 3 cells were
+    # observed; number of days considered).
     use = [d for d in dates_before if d < date][-RECENT_DAYS:]
     if not use:
         return np.full(len(links), np.nan), 0.0
@@ -122,6 +148,11 @@ def long_features(panel: str, split: str, date: str, links: list[str], vcut: np.
     from the truth layer (scripts/50) or from window_history (serving), and this
     block reads the masked layer. Resolving T here keeps the three aligned.
     """
+    # `vcut`: per-link queue threshold (km/h) aligned with `links`.
+    # `origin_ts`: the forecast time T. `dates_before`: the split's dates; only
+    # those before `date` feed the recent prior.
+    # Returns a frame indexed by link with the COLUMNS above; all NaN when the
+    # day's masked file is missing.
     n = len(links)
     a = day_arrays(panel, split, date, links)
     if a is None:

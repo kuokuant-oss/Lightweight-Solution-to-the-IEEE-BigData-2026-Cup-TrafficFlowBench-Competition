@@ -14,6 +14,15 @@ Nothing here writes to build/submission_v1/ or build/submission_v2/.
   .venv/bin/python scripts/112_build_submission_v3.py --oblique --dispersion \
       --models m15_task2_model_v2 --lam-v 1.0 --lam-q 0.0
 """
+
+# Role: record of the v3 build (the learned Task 1 stack with `--stack`, plus
+# the bias calibration). The reproduction pipeline does not run this file;
+# there, build/review_20260924_ctm/rl/serve_feats.py rebuilds the same stacked
+# fill (as in predict_panel_stacked) for each split.
+# Outputs under --out (default build/submission_v3): state_submission.csv, the
+# v2 queue_submission.csv and path_flow_submission.csv (copied after a SHA-256
+# check), the frozen calibration tables, submission.csv and a provenance stamp.
+
 from __future__ import annotations
 
 import argparse, shutil, subprocess, sys
@@ -24,16 +33,22 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Research gate (src/tfb/gate.py): returns at once unless TFB_RESEARCH_GATE=on.
 from src.tfb import gate
 gate.require()
+# B: classical fills (LRTC-TNN and interpolations); physics: link FD
+# parameters; predict1: the v1 blend, its fallbacks and bounds; TS: the
+# learned Task 1 stack (task1stack).
 from src.tfb import baselines as B, calib, grid, physics, predict1, prov, release as R, task1stack as TS
 
+# FORBIDDEN: the delivered v1 and v2 folders, which this builder never writes.
 OUT = R.REPO / "build" / "submission_v3"
 FORBIDDEN = {(R.REPO / "build" / "submission_v1").resolve(),
              (R.REPO / "build" / "submission_v2").resolve()}
 
 
 def _v2():
+    """Loads scripts/71_build_submission_v2.py as a module (for its build_queue)."""
     spec = util.spec_from_file_location("b71", R.REPO / "scripts" / "71_build_submission_v2.py")
     m = util.module_from_spec(spec); spec.loader.exec_module(m)
     return m
@@ -51,6 +66,8 @@ def predict_panel_stacked(panel: str, split: str, hist, w, models):
     grids = [grid.build_masked(panel, p) for p in files]
     if not grids:
         return pd.DataFrame()
+    # LRTC-TNN low-rank tensor completion of each field over all days of the
+    # split (link x time x day); day di of the result is one stack member.
     lrtc = {f: B.lrtc_tnn(np.stack([np.nan_to_num(g.value[f], nan=0.0) for g in grids], axis=2),
                           rho=predict1.LRTC_KNOBS[f][0], theta=predict1.LRTC_KNOBS[f][1])
             for f in predict1.FIELDS}
@@ -58,7 +75,10 @@ def predict_panel_stacked(panel: str, split: str, hist, w, models):
     par = physics.link_params(panel, links)
     rows = []
     for di, g in enumerate(grids):
+        # Stack at the target cells, frozen blend elsewhere.
         out = TS.predict_grid(g, di, lrtc, hist, w, par, models)
+        # Fallback for missing or below-floor values: the weekday x time-of-day
+        # history mean, then the median of the day's observed values.
         for f, floor in (("speed_kmh", predict1.SPEED_FLOOR), ("flow_vph", predict1.FLOW_FLOOR)):
             h = hist.get((f, pd.Timestamp(g.times[0]).weekday()))
             bad = ~np.isfinite(out[f]) | (out[f] < floor)
@@ -69,6 +89,7 @@ def predict_panel_stacked(panel: str, split: str, hist, w, models):
                 obs = g.value[f]
                 med = float(np.nanmedian(obs)) if np.isfinite(obs).any() else floor
                 out[f] = np.where(bad, med, out[f])
+        # Clip speed to [SPEED_FLOOR, SPEED_CAP], floor flow, and flatten to rows (link-major).
         v = np.clip(out["speed_kmh"], predict1.SPEED_FLOOR, predict1.SPEED_CAP)
         q = np.maximum(out["flow_vph"], predict1.FLOW_FLOOR)
         nL, nT = v.shape
@@ -83,6 +104,23 @@ def predict_panel_stacked(panel: str, split: str, hist, w, models):
 
 
 def build_state(out: Path, lam_v: float, lam_q: float, use_stack: bool) -> Path:
+    """Builds the calibrated Task 1 state file for validation and private.
+
+    Args:
+        out: output folder.
+        lam_v: share of the speed bias to remove (calib.apply).
+        lam_q: share of the flow bias to remove.
+        use_stack: fill target cells with the learned stack instead of the
+            frozen blend.
+
+    Returns:
+        Path of state_submission.csv (panel, timestamp, station_id, link_id,
+        mask_regime, speed_kmh, flow_vph).
+
+    Raises:
+        SystemExit: `use_stack` is set but no fitted stack exists, or a
+            template row has no prediction.
+    """
     w = predict1.load_weights()
     models = TS.load() if use_stack else None
     if use_stack and models is None:
@@ -118,6 +156,17 @@ def build_state(out: Path, lam_v: float, lam_q: float, use_stack: bool) -> Path:
 
 
 def main() -> None:
+    """Builds the v3 submission.
+
+    Parses the arguments, builds the calibrated state file, copies (or with
+    --rebuild-queue rebuilds) the Task 2 file and copies the Task 4 file from
+    v2, freezes the calibration tables, merges the parts with the official
+    merge_submissions.py and writes a provenance stamp.
+
+    Raises:
+        SystemExit: the output folder is a delivered v1/v2 folder, or a v2
+            file's SHA-256 differs from the expected value.
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--models", default="m15_task2_model_v2")
@@ -130,6 +179,7 @@ def main() -> None:
                          "it also RETIRES the single-variable attribution against v2.")
     ap.add_argument("--lam-v", type=float, default=1.0)
     ap.add_argument("--lam-q", type=float, default=0.0)
+    # Expected SHA-256 of v2's queue and path-flow files; a mismatch stops the build.
     ap.add_argument("--sha-queue", default="f3b3ff16a23996ceee8c15bf00bababed9fcaccaf109da4d24024de433d8a2f5")
     ap.add_argument("--sha-odme", default="d0344e71f9d20211ba2dcf18bde5fde13ad3ec5b16de6f5c6a98be658642f6c6")
     a = ap.parse_args()

@@ -20,6 +20,7 @@ from . import release as R
 
 
 def sha256_file(path: str | Path, chunk: int = 1 << 20) -> str:
+    """Returns the SHA-256 hex digest of a file, read in `chunk`-byte blocks."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
         while True:
@@ -38,7 +39,15 @@ def sha256_frame(d: pd.DataFrame) -> str:
 
 
 def git_state() -> dict[str, str]:
+    """Returns the git state of the repository that holds REPO.
+
+    Returns:
+        dict with `commit`, `branch`, `dirty_tracked` ('yes' when a tracked
+        file differs from the commit), the first 20 `tracked_changes` lines and
+        the count of untracked files `n_untracked`.
+    """
     def run(*args: str) -> str:
+        """Runs one git command in REPO; returns its stripped stdout or an `<unavailable: ...>` note."""
         try:
             return subprocess.run(["git", *args], cwd=R.REPO, capture_output=True,
                                   text=True, check=True).stdout.strip()
@@ -58,6 +67,7 @@ def git_state() -> dict[str, str]:
 
 
 def env_stamp() -> dict[str, str]:
+    """Returns the Python, platform, numpy, pandas, scipy and lightgbm versions."""
     import numpy, scipy                                           # noqa: E401
     try:
         import lightgbm
@@ -69,6 +79,9 @@ def env_stamp() -> dict[str, str]:
             "scipy": scipy.__version__, "lightgbm": lgb_v}
 
 
+# HARNESS_SOURCE: repository files shared by every validation_v3 Task 2 run;
+# source_state() hashes them into each stamp ("<missing>" for absent files).
+# CONTRACT: the written validation protocol, hashed with them.
 HARNESS_SOURCE = ("src/tfb/task2pool.py", "src/tfb/task2build.py", "src/tfb/task2eval.py", "src/tfb/task2cand.py", "src/tfb/task2oof.py",
                   "src/tfb/task2feat.py", "src/tfb/score2.py", "src/tfb/release.py",
                   "src/tfb/prov.py", "scripts/63_v3_pool.py", "scripts/64_v3_features.py",
@@ -100,12 +113,25 @@ def source_state(extra: tuple[str, ...] = ()) -> dict:
 
 
 def stamp(extra_sources: tuple[str, ...] = (), **extra) -> dict:
+    """Builds the provenance record of one run.
+
+    Args:
+        extra_sources: repository-relative files specific to this run, hashed
+            together with HARNESS_SOURCE.
+        **extra: further fields copied into the record (e.g. kind, inputs,
+            outputs).
+
+    Returns:
+        dict with `utc` (UTC time of the call), `git`, `env`, `source` and the
+        extra fields.
+    """
     return {"utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "git": git_state(), "env": env_stamp(),
             "source": source_state(extra_sources), **extra}
 
 
 def write_stamp(path: str | Path, payload: dict) -> None:
+    """Writes a stamp as indented JSON with sorted keys, creating the parent folder."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
                           encoding="utf-8")

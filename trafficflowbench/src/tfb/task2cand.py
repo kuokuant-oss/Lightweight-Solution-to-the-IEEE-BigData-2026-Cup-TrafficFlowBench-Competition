@@ -31,6 +31,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+# Role: no program of the reproduction pipeline imports this module; it is the
+# record of decision rules evaluated in the validation harness. The rules take
+# a frame `d` with one row per scored cell (window_id, condition and a
+# probability column) and return a 0/1 prediction per row.
+
 
 def expected_iou_select(d: pd.DataFrame, prob_col: str = "prob", min_k: int = 1,
                         conditions: tuple[str, ...] | None = None,
@@ -59,16 +64,20 @@ def expected_iou_select(d: pd.DataFrame, prob_col: str = "prob", min_k: int = 1,
     ``conditions`` restricts the rule to those conditions; windows of any other
     condition keep ``fallback`` (the control prediction).
     """
+    # `min_k`: smallest set size taken per window, even when a smaller prefix
+    # scores higher. Returns a 0/1 int array aligned with the rows of `d`.
     out = (np.zeros(len(d), dtype=int) if fallback is None
            else np.asarray(fallback).astype(int).copy())
     sel = (np.ones(len(d), bool) if conditions is None
            else d.condition.isin(conditions).to_numpy())
     if not sel.any():
         return out
+    # Sorts the selected rows by window, then by descending probability.
     order = np.lexsort((-d.loc[sel, prob_col].to_numpy(), d.loc[sel, "window_id"].factorize()[0]))
     idx = d.index[sel].to_numpy()[order]
     win = d.loc[idx, "window_id"].to_numpy()
     prob = d.loc[idx, prob_col].to_numpy(dtype=float)
+    # Start and end positions of each window's block in the sorted order.
     starts = np.flatnonzero(np.r_[True, win[1:] != win[:-1]])
     ends = np.r_[starts[1:], len(win)]
     take = []
@@ -87,6 +96,9 @@ def expected_iou_select(d: pd.DataFrame, prob_col: str = "prob", min_k: int = 1,
 def empty_fallback(d: pd.DataFrame, pred: np.ndarray, k: int,
                    prob_col: str = "prob") -> np.ndarray:
     """Give every window whose prediction is empty its top-k cells by probability."""
+    # `pred`: 0/1 prediction per row of `d`. Returns a copy in which every
+    # window without a predicted cell gets its k most probable cells; returns
+    # `pred` itself when k <= 0.
     if k <= 0:
         return pred
     out = np.asarray(pred).copy()
@@ -102,4 +114,5 @@ def empty_fallback(d: pd.DataFrame, pred: np.ndarray, k: int,
 
 
 def n_empty_windows(d: pd.DataFrame, pred: np.ndarray) -> int:
+    """Returns how many windows of ``d`` have no predicted cell in ``pred``."""
     return int((pd.Series(np.asarray(pred)).groupby(d.window_id.to_numpy()).sum() == 0).sum())

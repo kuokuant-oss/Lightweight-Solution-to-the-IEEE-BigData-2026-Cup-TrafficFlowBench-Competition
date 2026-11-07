@@ -1,7 +1,5 @@
 # TrafficFlowBench 2026 — Team Anton
 
-> DRAFT 2026-11-07. Hashes, runtimes and the file tables are filled in after the cold runs.
-
 **Learned state reconstruction with physical projections, plus site- and block-structured queue
 decoding.** This is the code and the frozen models for our entry in the
 [2026 IEEE Big Data Traffic Flow Bench](https://www.kaggle.com/competitions/2026-ieee-big-data-traffic-flow-bench).
@@ -38,8 +36,10 @@ The system has four parts, one per task:
 4. **Task 4.** Path flows by regularised non-negative least squares against the released link counts
    and the weak OD prior.
 
-`METHOD.md` describes each step with pointers into the code. `TRAINING.md` documents how every
-shipped model was trained. The technical report gives the evaluation and the error analysis.
+`docs/METHOD_OVERVIEW_zh.md` describes each step, with three method diagrams in `docs/figures/`.
+`TRAINING.md` documents how every shipped model was trained. Every program carries docstrings that
+explain its role, inputs and outputs. The technical report gives the evaluation and the error
+analysis.
 
 ## Running
 
@@ -61,7 +61,8 @@ The run:
 - writes `submission.csv`;
 - prints its SHA256 next to the expected value above.
 
-Runtime is TODO on a 10-core Apple M-series machine with 16 GB of RAM.
+A full run takes 70 minutes on an Apple M4 (10 cores, 16 GB RAM), with a peak memory of 5.5 GB.
+The output folder needs about 10 GB.
 
 ### Notes
 
@@ -76,8 +77,9 @@ Runtime is TODO on a 10-core Apple M-series machine with 16 GB of RAM.
   (pseudo-holes cut from observed data). This is part of the method and runs inside the entry script.
 - **Paths.** The programs keep the absolute paths of the machine they were written on.
   `trafficflowbench/scripts/ssd_runtime.py` maps those roots onto the run tree when the program
-  starts. Source files are therefore byte-identical to the versions that produced the submission
-  (see `CHANGES_FROM_ORIGINAL.md` for the few edits).
+  starts. The programs therefore keep the code of the versions that produced the submission;
+  `CHANGES_FROM_ORIGINAL.md` lists the few edits and the comment pass, which added docstrings and
+  comments only.
 
 ## Repository layout
 
@@ -87,13 +89,17 @@ requirements.txt           pinned packages
 bin/tfb-run                runs one program inside the run tree, with the path mapping
 pipeline/                  ordered commands per task, run-tree staging, final assembly
 trafficflowbench/          programs and frozen train-only artifacts, at their original relative paths
-evidence/                  records of the submitted chain and of our verification runs
-METHOD.md  TRAINING.md  CHANGES_FROM_ORIGINAL.md  THIRD_PARTY_NOTICES.md  LICENSE
+training/                  the programs that trained the frozen models (record; not run)
+docs/                      method overview and diagrams
+evidence/                  submission record, reproduction and time-rule checks
+third_party/               licence texts of the included third-party code
+checksums.txt              SHA256 of every file
+TRAINING.md  CHANGES_FROM_ORIGINAL.md  THIRD_PARTY_NOTICES.md  LICENSE
 ```
 
 File and folder names keep the prefixes they had during development (`review_20260925/round2`,
-`R11c`, `BND`, …), so that they match the recorded runs in `evidence/`. `METHOD.md` §9 explains the
-names.
+`R11c`, `BND`, …), so that they match the recorded runs and manifests. The docstrings and the folder
+READMEs explain each name.
 
 ## Data and licence
 

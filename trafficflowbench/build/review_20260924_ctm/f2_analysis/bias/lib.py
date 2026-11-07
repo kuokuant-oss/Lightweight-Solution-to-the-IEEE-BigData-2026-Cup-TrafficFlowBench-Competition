@@ -2,6 +2,11 @@
 Reproduces dense/eval_rul.py + dense/mix_eval.py exactly (A-block baseline, selrec6, mix75, block-mean decode),
 adds a vectorised date bootstrap identical in construction to score.paired_boot (same RNG draws -> same CI)
 that also supports window subsets and importance weights."""
+#
+# Role: analysis library (record); the reproduction pipeline does not use it. It scores the ongoing-queue
+# ensemble on the March pseudo-val windows ("ruler"): A = the six newworld ongoing LightGBM models (og_*),
+# N = the six rep2 models with selector and recency features (selrec, geomselrec), mixed as 0.75 N + 0.25 A
+# ("mix75") and decoded by block mean (the mean probability of a link group that queues together).
 import os
 for n in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS'):
     os.environ[n] = '3'
@@ -9,6 +14,8 @@ import sys, importlib
 from pathlib import Path
 import numpy as np, pandas as pd, lightgbm as lgb
 
+# AMOD / A_NAMES: model folder and names of the A ensemble. SR6: the six N model files. RD: ruler versions
+# (v1 = ruler/fakeval, v2 = ruler2), each with its own score.py and pseudo-val cache.
 ROOT = Path('/Volumes/Crucial X9/trafficflow/trafficflowbench'); CT = ROOT / 'build/review_20260924_ctm'
 HERE = Path(__file__).resolve().parent
 REL = ROOT.parent / 'tfb_competition_data' / 'kaggle_public'
@@ -16,20 +23,24 @@ AMOD = ROOT / 'build/review_20260924_newworld/work/feat/models'
 A_NAMES = ['V2_noID_noPrior', 'V2s2', 'V2s3', 'V6_V2geom', 'V6s2', 'V6s3']
 SR6 = [CT / f'rep2/m_R_V2selrec_s0_seed{i}.txt' for i in range(3)] + [CT / f'rep2/m_R_V2geomselrec_s0_seed{i}.txt' for i in range(3)]
 RD = {'v1': CT / 'ruler/fakeval', 'v2': CT / 'ruler2'}
+# FAM: corridor -> family (both directions of a freeway).
 FAM = {'D7_I10_E': 'D7_I10', 'D7_I10_W': 'D7_I10', 'D7_I210_E': 'D7_I210', 'D7_I210_W': 'D7_I210', 'D7_I405_N': 'D7_I405',
        'D7_I405_S': 'D7_I405', 'D12_I5_N': 'D12_I5', 'D12_I5_S': 'D12_I5'}
+# BID: panel -> {link_id: block id} from my_blocks.npy (groups of links that queue together).
 _B = np.load(CT / 'ruler/blocks/my_blocks.npy', allow_pickle=True).item()
 BID = {k: dict(zip(v['links'], v['bid'])) for k, v in _B.items()}
 _BOOST = {}
 
 
 def booster(p):
+    """Returns the LightGBM booster of a model file, loaded once and cached."""
     p = str(p)
     if p not in _BOOST: _BOOST[p] = lgb.Booster(model_file=p)
     return _BOOST[p]
 
 
 def score_mod(rv):
+    """Imports and returns the `score` module of ruler version rv ('v1' or 'v2')."""
     sp = str(RD[rv])
     for k in list(sys.modules):
         if k == 'score': del sys.modules[k]
@@ -56,23 +67,37 @@ def nan_mask(s, frac, seed=7):
 
 
 def pred_models(s, models):
+    """Returns the mean predicted probability of the given LightGBM model files on frame s."""
     return np.mean([booster(m).predict(s[booster(m).feature_name()], num_threads=3) for m in models], axis=0)
 
 
 def predA(s):
+    """Returns the A-ensemble probability (mean of the six og_* models)."""
     return pred_models(s, [AMOD / f'og_{n}.txt' for n in A_NAMES])
 
 
 def predN(s):
+    """Returns the N-ensemble probability (mean of the six selector + recency models)."""
     return pred_models(s, SR6)
 
 
 def block_mean(s, p):
+    """Returns each row's probability replaced by the mean over its (window, timestamp, block)."""
     z = pd.DataFrame({'window_id': s.window_id.values, 'timestamp': s.timestamp.values, 'bid': s.bid.values, 'prob': p})
     return z.groupby(['window_id', 'timestamp', 'bid']).prob.transform('mean').to_numpy()
 
 
 def evaluate(S, s, qpred):
+    """Scores 0/1 queue predictions with the ruler module S on the ongoing windows.
+
+    Args:
+        S: ruler module from score_mod().
+        s: pv cache rows (window_id, timestamp, link_id).
+        qpred: 0/1 prediction per row.
+
+    Returns:
+        (summary dict, per-window frame).
+    """
     z = s[['window_id', 'timestamp', 'link_id']].copy(); z['queue_pred'] = qpred.astype(int)
     summ, fr = S.evaluate(z, conditions=['queue_ongoing'])
     return summ, fr.reset_index(drop=True)
@@ -118,4 +143,5 @@ def boot(fa, fb, col='iou', subset=None, w=None, n=1000, seed=0):
 
 
 def fmt(r):
+    """Formats a boot() result as 'delta [lo, hi] n=<windows> <better>/<worse>'."""
     return f"{r['delta']:+.4f} [{r['lo']:+.4f}, {r['hi']:+.4f}] n={r['n']} {r['better']}/{r['worse']}"

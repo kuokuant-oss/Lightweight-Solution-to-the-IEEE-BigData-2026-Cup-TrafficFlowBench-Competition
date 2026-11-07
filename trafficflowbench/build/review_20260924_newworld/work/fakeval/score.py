@@ -1,13 +1,24 @@
 """Score queue predictions on pseudo windows.  score(pred_df, split) -> dict, per-window frame."""
+# Research scorer for Task 2 queue predictions on pseudo windows cut from the
+# validation month (labels_<split>.parquet, windows_<split>.parquet and a
+# pseudo release under root/task2/; these files are not shipped). og_exp.py and
+# og_ens.py use it to compare ongoing variants. In the reproduction it is only
+# imported (through og_exp.py); none of its functions run.
+#
+# Usage: score.py [split] [prediction.parquet ...]  (scores the persistence
+# baseline, then each prediction file).
 import numpy as np, pandas as pd
 from pathlib import Path
 SP = Path(__file__).resolve().parent
+# FAM groups the two directions of a freeway into one corridor family; scores
+# are averaged per panel, then per family, then over families.
 FAM = {'D7_I10_E': 'D7_I10', 'D7_I10_W': 'D7_I10', 'D7_I210_E': 'D7_I210', 'D7_I210_W': 'D7_I210', 'D7_I405_N': 'D7_I405',
        'D7_I405_S': 'D7_I405', 'D12_I5_N': 'D12_I5', 'D12_I5_S': 'D12_I5'}
 _LAB = {}
 
 
 def labels(split='validation'):
+    """Returns the cached (cell labels, window table) of a pseudo split."""
     if split not in _LAB:
         lab = pd.read_parquet(SP / f'labels_{split}.parquet')
         w = pd.read_parquet(SP / f'windows_{split}.parquet')[['window_id', 'panel', 'condition', 'regime', 'date', 'mult', 'first']]
@@ -16,6 +27,16 @@ def labels(split='validation'):
 
 
 def agg(fr, col='iou'):
+    """Averages per-window scores into per-condition and overall queue scores.
+
+    Args:
+      fr: per-window frame with panel, condition and the score column.
+      col: score column, 'iou' or 'iou_clean'.
+
+    Returns:
+      Dict {condition: score, 'S_queue': score}. Each value is the mean over
+      corridor families of the family mean of the per-panel mean.
+    """
     pc = fr.groupby(['panel', 'condition'])[col].mean().reset_index()
     out = {}
     for cond, g in pc.groupby('condition'):
@@ -25,6 +46,19 @@ def agg(fr, col='iou'):
 
 
 def score(pred, split='validation', windows=None):
+    """Scores queue predictions window by window with IoU.
+
+    Args:
+      pred: frame with window_id, timestamp, link_id and queue_pred (0/1).
+        Label cells without a prediction count as not queued.
+      split: pseudo split name.
+      windows: optional window ids to keep.
+
+    Returns:
+      One row per window: iou (over label cells with an observed label,
+      `mask`), iou_clean (against the clean labels, all cells), n_true,
+      n_pred, joined to the window table. IoU is 1 when both sets are empty.
+    """
     lab, w = labels(split)
     p = pred[['window_id', 'timestamp', 'link_id', 'queue_pred']]
     m = lab.merge(p, on=['window_id', 'timestamp', 'link_id'], how='left')
@@ -42,12 +76,22 @@ def score(pred, split='validation', windows=None):
 
 
 def report(fr, name=''):
+    """Prints the observed and clean scores of a per-window frame; returns both dicts."""
     a = agg(fr, 'iou'); b = agg(fr, 'iou_clean')
     print(f'{name:28s} obs: onset {a.get("queue_onset", np.nan):.4f} ongoing {a.get("queue_ongoing", np.nan):.4f} S {a["S_queue"]:.4f} | clean: onset {b.get("queue_onset", np.nan):.4f} ongoing {b.get("queue_ongoing", np.nan):.4f}  (n={fr.groupby("condition").size().to_dict()})')
     return a, b
 
 
 def persistence(split='validation'):
+    """Builds the persistence baseline for every pseudo window of a split.
+
+    A link is predicted queued at all six horizon steps when its speed at the
+    last history stamp (T-5 min) is at most 0.6 x free-flow speed and the cell
+    is score-eligible.
+
+    Returns:
+      Frame with window_id, timestamp, link_id and queue_pred (0/1).
+    """
     root = SP / 'root' / 'task2'
     out = []
     for panel in FAM:

@@ -3,6 +3,13 @@ Jan-fit (v2 rows, out of sample for Feb) binary LightGBM p_ramp(queue | G2v2 bou
 Feb official-like test, HMP50 structure kept: speed = 0.5*T1 + 0.5*clip((1-p*)*fv + p*qv) with the HM heads fv/qv.
 Pre-declared p* variants: R (p_ramp), RP (co-switch-group pooled p_ramp), MIX (0.5 pooled HM p + 0.5 pooled p_ramp).
 Also the additive residual (b3 sp_M2, lam .5) on top of each, and log-loss / AUC of p vs the truth state."""
+# Research record; pipeline/task1.sh does not run it. Its head
+# f1_phead_janfit.txt is a frozen input of c4_phead_transfer.py; other scripts
+# import `ll` and `auc`.
+# Inputs: b3_jan.parquet / b3_feb.parquet (gap rows with features),
+# a1_feb_rows.parquet (served HMP50 parts) and b3_feb_preds.parquet (c_sp_M2).
+# Outputs: f1_phead_janfit.txt, f1_phead_noramp_janfit.txt, f1_results.json
+# and f1_feb_preds.parquet.
 import os, sys, json, gc
 os.environ.setdefault('OMP_NUM_THREADS', '2')
 from pathlib import Path
@@ -16,15 +23,18 @@ NR = 500
 
 
 def ll(y, p):
+    """Returns the mean binary log-loss of probabilities `p` for labels `y` (p clipped to [1e-6, 1 - 1e-6])."""
     p = np.clip(p, 1e-6, 1 - 1e-6); return float(-(y * np.log(p) + (1 - y) * np.log(1 - p)).mean())
 
 
 def auc(y, p):
+    """Returns the ROC AUC of scores `p` for labels `y`."""
     from sklearn.metrics import roc_auc_score
     return float(roc_auc_score(y, p))
 
 
 def main():
+    """Fits the ramp-aware queue head on January 2031 and tests the p* variants on February."""
     feats = SP + RF.RAMP_FEATS + RF.NEAR_FEATS
     cols = list(dict.fromkeys(KEY + ['y_v', 'free_speed_kmh', 'step'] + feats))
     jan = pd.read_parquet(HERE / 'b3_jan.parquet', columns=[c for c in cols if c != 'step'])

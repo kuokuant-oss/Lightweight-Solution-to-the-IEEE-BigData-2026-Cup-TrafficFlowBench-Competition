@@ -4,7 +4,12 @@ Candidate fields: 'cap' = CAP Feb confirmation candidate (model_capacity_2026092
 'dk50' = its parent (full DK50). Holes = HMP50 strict (round(2*strict_pool-strict_t1,3), flow ch_ql).
 Scorer returns per (panel, day) sums; summarize() reproduces the official-form macro (panel x regime -> panel -> family).
 """
+# Research helper (no main); state_density/j1_pilot.py imports it to build
+# February 2031 grids and score candidates. CAP: the capacity-model state
+# candidate (model_capacity_20260927); DK50: the density-head candidate of
+# review_20260927_structural.
 import os
+# Caps the BLAS/OpenMP thread pools at 2 before numpy loads.
 for k in ['OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS']: os.environ[k] = '2'
 import sys, json
 from pathlib import Path
@@ -16,6 +21,9 @@ sys.path.insert(0, str(RL)); sys.path.insert(0, str(STRUCT)); sys.path.insert(0,
 import rleval as E
 import matched_background as MATCH
 
+# KEYS: general target cells of the February predictions; PRED: CAP and DK50
+# values on them; HOLES: February HMP50 hole predictions. Each is loaded once
+# (cached in _keys, _pred, _holes).
 KEYS = STRUCT / 'density/feb_prediction_keys.parquet'
 PRED = ROOT / 'build/model_capacity_20260927/state/confirmation/predictions.npz'
 HOLES = ROOT / 'build/review_20260927_research/feb_pool/predictions.parquet'
@@ -23,12 +31,14 @@ _keys = None; _pred = None; _holes = None
 
 
 def keys():
+    """Returns the (panel_i, day, li, ci) keys of the February general target cells (cached)."""
     global _keys
     if _keys is None: _keys = pd.read_parquet(KEYS, columns=['panel_i', 'day', 'li', 'ci'])
     return _keys
 
 
 def preds():
+    """Returns the candidate arrays {'cap': (v, q), 'dk50': (v, q)} (speed km/h, per-lane flow; cached)."""
     global _pred
     if _pred is None:
         z = np.load(PRED); _pred = {'cap': (z['candidate_v'], z['candidate_q']), 'dk50': (z['parent_v'], z['parent_q'])}
@@ -36,6 +46,7 @@ def preds():
 
 
 def holes():
+    """Returns the February hole predictions (strict HMP50 parts, parent flow, truth; cached)."""
     global _holes
     if _holes is None: _holes = pd.read_parquet(HOLES, columns=['panel', 'date', 'origin', 'li', 'step_i', 'ch_ql', 'y_v', 'y_ql', 'is_target', 'strict_pool', 'strict_t1'])
     return _holes
@@ -43,6 +54,10 @@ def holes():
 
 def frame(p, cand='cap'):
     """Return dict of full-month grids for panel p (links x days*288) with candidate target values filled."""
+    # Returned keys: v / q (candidate grids, total flow), vt / qt (truth), Nt
+    # (true storage, vehicles per link), masks (valid LWR transitions of frames
+    # A and B), memA / memB (frame supports), fdp (per-lane FD parameters) and
+    # sel / li / ti (index of the candidate target cells).
     pi = E.PANELS10.index(p); z, meta = MATCH.load(p, '2031_02'); nd = len(meta['dates'])
     stack = lambda f: np.concatenate([z[f'd{i}_{f}'] for i in range(nd)], axis=1)
     ln = np.maximum(z['ln'], 1)[:, None]; L = z['par_length_km'][:, None]; lanes = np.maximum(z['par_lanes'], 1)[:, None]
@@ -79,6 +94,11 @@ def frame(p, cand='cap'):
 
 def score(F, v=None, q=None, anatomy=False, cong=None):
     """Per-day sums for grids v,q (total flow). Defaults to F['v'],F['q']."""
+    # Returns one dict per day: state SSEs (ssev; sseq per lane), LWR error
+    # numerator / denominator (num / den) and FD error sums (fdn / fdd) for
+    # frames A and B. With `anatomy`, the frame-B LWR error is also split by
+    # target-target / target-observed transitions, hole / general cells and
+    # congested (true speed < 0.6 x free-flow) / free cells.
     v = F['v'] if v is None else v; q = F['q'] if q is None else q
     rt, vt, qt, ln, L, lanes = F['rt'], F['vt'], F['qt'], F['ln'], F['L'], F['lanes']
     n = q / np.maximum(v, 1) * L; err = n - F['Nt']; de = np.diff(err, axis=1); dt = np.diff(F['Nt'], axis=1)
@@ -109,6 +129,12 @@ def score(F, v=None, q=None, anatomy=False, cong=None):
 
 
 def summarize(a):
+    """Turns per-day sums into proxy scores (same formula as density_experiment.summarize).
+
+    Returns:
+      (mean, perpanel, grouped): scores per candidate, per panel and
+      candidate, and per panel/candidate/regime.
+    """
     g = a.groupby(['panel', 'cand', 'regime']).sum(numeric_only=True)
     g['S_state'] = .54 * (1 - np.sqrt(g.ssev / g.n) / 25).clip(lower=0) + .46 * (1 - np.sqrt(g.sseq / g.n) / 600).clip(lower=0)
     for f in 'AB':

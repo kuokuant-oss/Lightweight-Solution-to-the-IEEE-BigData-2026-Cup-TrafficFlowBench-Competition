@@ -1,5 +1,14 @@
 """Exact CAP/R11c general-key parity and frozen J1 keyed serving updates."""
+# Runs in pipeline/task1.sh step 10: `parity` (j1_parity), then `serve`
+# (j1_serve). J1: the density head of j1_pilot.py (cap_full_feb.txt), which
+# predicts the per-lane density error of the parent state; speed and flow are
+# projected halfway onto the corrected density. It changes only the general
+# (non-hole) Task 1 cells of the 8 Task 2 panels.
+# Outputs: OFFICIAL_PARENT_PARITY.json (parity), and
+# state_updates_J1_CAP_DENSITY.parquet with OFFICIAL_UPDATES.json (serve).
+# Usage: j1_official.py parity | serve
 import os
+# Caps the BLAS/OpenMP thread pools at 2 before numpy and LightGBM load.
 for k in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','VECLIB_MAXIMUM_THREADS'):os.environ[k]='2'
 import sys,json,gc,time
 sys.dont_write_bytecode=True
@@ -8,12 +17,30 @@ import numpy as np,pandas as pd,pyarrow.parquet as arrow,lightgbm as lgb
 HERE=Path(__file__).resolve().parent;ROOT=HERE.parents[2]
 sys.path.insert(0,str(HERE));import j1_pilot as J
 D=J.D
+# CAP: capacity-model candidate CSV (written in step 8); R11c: CAP + D12 + gap
+# PRP + ongoing refit CSV (rebuilt state-only by pipeline/task1_state_csv.py in
+# step 10). CSHA / RSHA: SHA256 of the original files. N: submission rows.
 CAP=ROOT/'build/deliverables/2026-09-27/capacity/submission_HMP50_DK50_CAP.csv'
 R11C=ROOT/'build/review_20260929_target092/candidates/submission_R11c_CAP_D12_GAPPRP_ONGREFIT.csv'
 CSHA='65854d643243bc79207baa3b5913062e03553c6614648ca878250d8b58efccf1'
 RSHA='b6378dfdc7644e76fdc92f24b19791af71675ceadca809fe70ee4d43dd9458ba'
 N=6980503
 def released_scope(mask):
+    """Checks that the given keys are state rows of the 8 Task 2 panels outside every official 90-minute hole.
+
+    A hole spans the 90 minutes from each window's forecast_start.
+
+    Args:
+      mask: Boolean array indexed by submission_id marking the keys.
+
+    Returns:
+      Dict with the key count, the number of keys inside official holes
+      (must be 0) and the counts per split and panel.
+
+    Raises:
+      AssertionError: When a key is not such a state row, appears twice, or
+        falls inside a hole.
+    """
     from src.tfb import release as REL
     windows={}
     for split in ['validation','private']:
@@ -31,6 +58,16 @@ def released_scope(mask):
     assert keyrows==int(mask.sum()) and np.array_equal(seen,mask) and overlap==0,(keyrows,overlap)
     return dict(released_key_rows=keyrows,changed_or_checked_rows_in_official_90min_holes=overlap,all_state=True,only_eight_general_panels=True,complete_unique_key_coverage=True,counts=counts)
 def read_parent(path,expected):
+    """Reads the speed and total flow of every state row of a submission CSV.
+
+    Args:
+      path: Submission CSV.
+      expected: SHA256 of the original file; the match is only printed.
+
+    Returns:
+      (v, q): arrays of length N + 1 indexed by submission_id (NaN for
+      non-state rows).
+    """
     # package edit: the parent CSVs are regenerated in this run; CAP/R11c equality on every general key is checked in parent_parity()
     print(path.name,'sha256',J.sha(path)==expected and 'matches the original' or 'differs (regenerated parent)',flush=True)
     v=np.full(N+1,np.nan);q=np.full(N+1,np.nan);rows=0
@@ -38,6 +75,7 @@ def read_parent(path,expected):
         rows+=len(d);s=d[d.task=='state'];sid=s.submission_id.to_numpy(int);v[sid]=s.speed_kmh.to_numpy();q[sid]=s.flow_vph.to_numpy()
     assert rows==N;return v,q
 def parent_parity():
+    """Checks that CAP and R11c have identical speed and flow on all 6,010,695 general keys; writes OFFICIAL_PARENT_PARITY.json."""
     start=time.time();cv,cq=read_parent(CAP,CSHA);rv,rq=read_parent(R11C,RSHA);mask=np.zeros(N+1,bool);stats=[]
     for split in ['validation','private']:
         for p in D.E.PANELS10[:8]:
@@ -51,6 +89,13 @@ def parent_parity():
     J.dump('OFFICIAL_PARENT_PARITY.json',dict(CAP_sha=CSHA,R11c_sha=RSHA,scope='All eight-panel general-state keys directly read from immutable official parent CSVs',keys=int(mask.sum()),released_scope=scope,stats=stats,seconds=time.time()-start))
     print('OFFICIAL_PARENT_PARITY',int(mask.sum()),time.time()-start,flush=True)
 def serve():
+    """Writes the J1 keyed updates on top of the R11c parent.
+
+    For each split and panel, builds the head features from the RLB serving
+    table with the R11c values as parent, predicts the corrected density and
+    projects speed and flow halfway onto it (speed in [6, 120.75] km/h, total
+    flow >= 50 vph, 3 decimals). Keeps the rows whose values change.
+    """
     start=time.time()
     assert all(json.loads((HERE/f'{s}_results.json').read_text())['pass_month'] for s in ['validation','private'] if (HERE/f'{s}_results.json').exists())  # package edit: month gate files are not shipped
     parity=json.loads((HERE/'OFFICIAL_PARENT_PARITY.json').read_text());assert parity['keys']==6010695

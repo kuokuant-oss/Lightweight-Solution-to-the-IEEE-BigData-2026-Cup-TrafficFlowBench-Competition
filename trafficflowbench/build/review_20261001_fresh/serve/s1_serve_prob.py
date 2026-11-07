@@ -4,7 +4,16 @@ kinds: parent (current through-Feb selrec3/geomselrec3/A25), L0 (R20 saved model
        T0 (R20 TabM, torch; mps if available else cpu).
 Reads R20 serving_stage inputs read-only; writes only under this directory. No decoding, no CSV.
 """
+# Runs in pipeline/ongoing.sh as `s1_serve_prob.py parent M1f M1sf`.
+# parent: the production ongoing models of inference_common.parent_paths
+# ('march'): 3 selrec seeds, 3 geomselrec seeds and the 6 A members ("a25":
+# the location-free new-world ensemble, weight .25 in the mix). M1f / M1sf:
+# the monotone LightGBMs of ../mono (columns of variants M1 / M1s).
+# Output: prob/<split>_<kind>_prob.npz with per-seed probabilities for the
+# 43,500 rows of each split (serving_stage ROW_INDEX order).
+# Usage: s1_serve_prob.py KIND [KIND ...] [--splits validation private]
 import os, sys
+# Caps the BLAS/OpenMP thread pools at 2 before numpy and the models load.
 for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
     os.environ[k] = "2"
 sys.dont_write_bytecode = True
@@ -12,6 +21,7 @@ from pathlib import Path
 import json, argparse, time
 import numpy as np, pandas as pd
 
+# Original absolute root; bin/tfb-run maps it onto the run tree.
 R20 = Path("/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_round20")
 Q = R20 / "queue_data"; SS = Q / "serving_stage"
 sys.path.insert(0, str(Q))
@@ -26,6 +36,7 @@ FS = SPEC["original_features"]
 
 
 def base_of(split):
+    """Returns the 98 base features (memory-mapped) and the row index of one split."""
     b = np.load(SS / f"{split}_base98.npy", mmap_mode="r")
     ri = pd.read_parquet(SS / f"{split}_ROW_INDEX.parquet")
     assert len(b) == len(ri) == 43500
@@ -33,6 +44,15 @@ def base_of(split):
 
 
 def run(kind, split):
+    """Writes the per-seed probabilities of one model kind for one split (skipped when present).
+
+    Args:
+      kind: 'parent', 'L0', 'M<k>' (including 'M1f' and 'M1sf') or 'T0'.
+      split: 'validation' or 'private'.
+
+    Raises:
+      SystemExit: For an unknown kind.
+    """
     out = OUT / f"{split}_{kind}_prob.npz"
     if out.exists():
         print("exists", out); return

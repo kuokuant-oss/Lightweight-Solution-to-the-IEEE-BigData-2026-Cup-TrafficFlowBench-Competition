@@ -3,6 +3,13 @@
 Only project-owned modules are adapted. Files on disk, JSON provenance, source
 hashes and third-party modules remain unchanged. Use bin/tfb-python to enable.
 """
+# In this package the launcher is bin/tfb-run: it puts scripts/ssd_bootstrap and scripts/ on
+# PYTHONPATH, sets TFB_SSD_COMPAT=1 (so ssd_bootstrap/sitecustomize.py calls install()) and runs
+# main() with the program and its arguments.
+# Mechanism: project-owned Python sources (see owned()) are compiled through _compile(), which
+# rewrites string constants that contain an old project root and makes `from pathlib import Path`
+# import the remapping Path class below; their open, compile and exec builtins remap paths too.
+# The path map itself is portable_paths.py.
 import ast
 import builtins
 import hashlib
@@ -18,8 +25,10 @@ import sys
 import types
 import __future__
 
+# REPO: this copy's trafficflowbench/ folder; ROOT: the run tree root.
 REPO = NativePath(__file__).resolve().parents[1]
 ROOT = REPO.parent
+# Hashes of this adapter and of the path map; they go into each audit record (see _compile).
 ADAPTER_SHA256 = hashlib.sha256(NativePath(__file__).read_bytes()).hexdigest()
 PORTABLE_BINDING = {}
 for _rel in ('scripts/portable_paths.py', 'environment/portable-files.json'):
@@ -28,23 +37,31 @@ for _rel in ('scripts/portable_paths.py', 'environment/portable-files.json'):
         PORTABLE_BINDING[_rel] = hashlib.sha256(_p.read_bytes()).hexdigest()
 from portable_paths import OLD_ROOTS, resolve_string, rebase_text as portable_rebase_text
 _PATTERNS = [re.compile(re.escape(root) + r'(?=$|[/\s\x22\x27])') for root in OLD_ROOTS]
+# The concrete pathlib class of this OS (PosixPath on macOS and Linux), base of the remapping Path.
 _BASE_PATH = type(NativePath())
+# Unpatched builtins, used by the adapter itself.
 _NATIVE_COMPILE, _NATIVE_EXEC, _NATIVE_OPEN = builtins.compile, builtins.exec, builtins.open
+# Compiler flags of every __future__ feature, so _compile inherits the caller's future imports
+# the way compile() does.
 _FUTURE_FLAGS = sum(getattr(__future__, n).compiler_flag for n in __future__.all_feature_names)
 _INSTALLED = False
+# Audit records of every source that the transform changed (see _compile).
 TRANSFORMS = []
 
 
 def rebase_text(value):
+    """Rewrites old project roots in source text (portable_paths.rebase_text)."""
     return portable_rebase_text(value)
 
 
 def resolve(value):
+    """Maps a path from an old root onto the run tree (portable_paths.resolve_string)."""
     return resolve_string(value)
 
 
 def canonical(value):
     """Stable path identity for pre-migration legacy checkpoint digests only."""
+    # Inverse direction: run-tree paths go back to OLD_ROOTS[0], so digests match the old ones.
     if isinstance(value, str):
         here = str(ROOT)
         if value == here or value.startswith(here + '/'):
@@ -67,26 +84,34 @@ def canonical(value):
 
 class Path(_BASE_PATH):
     """Normal Path semantics with only the two obsolete project roots remapped."""
+    # Every constructor and join returns this class, so paths built from an old root stay mapped.
     def __new__(cls, *args, **kwargs):
+        """Creates the path at its remapped location."""
         return super().__new__(cls, resolve(NativePath(*args)), **kwargs)
 
     def __init__(self, *args, **kwargs):
+        """Initialises the path (from Python 3.12 pathlib takes the arguments in __init__)."""
         if sys.version_info >= (3, 12):
             super().__init__(resolve(NativePath(*args)), **kwargs)
 
     def __truediv__(self, other):
+        """Joins like pathlib and returns the remapping Path type."""
         return Path(str(super().__truediv__(other)))
 
     def joinpath(self, *other):
+        """Joins like pathlib and returns the remapping Path type."""
         return Path(str(super().joinpath(*other)))
 
     def with_name(self, name):
+        """Like pathlib, returning the remapping Path type."""
         return Path(str(super().with_name(name)))
 
     def with_suffix(self, suffix):
+        """Like pathlib, returning the remapping Path type."""
         return Path(str(super().with_suffix(suffix)))
 
     def read_text(self, *args, **kwargs):
+        """Reads the text; project .py sources come back with old roots rebased."""
         text = super().read_text(*args, **kwargs)
         # Legacy generators read and compile Python source fragments. Keep binary
         # reads untouched so sha256 and source manifests still see original bytes.
@@ -94,6 +119,16 @@ class Path(_BASE_PATH):
 
 
 def owned(filename):
+    """Tells whether a file is a project Python source that the path layer adapts.
+
+    Args:
+        filename: path in any form accepted by resolve().
+
+    Returns:
+        True for .py files under the run tree root, except the path-layer files themselves and
+        files under .git, virtual environments, site-packages, __pycache__, runtime,
+        ssd_bootstrap or external.
+    """
     try:
         p = NativePath(resolve(filename)).resolve()
         rel = p.relative_to(ROOT)
@@ -106,11 +141,19 @@ def owned(filename):
 
 
 class Relocate(ast.NodeTransformer):
+    """AST transformer that rebases old roots and redirects `from pathlib import Path`.
+
+    Attributes:
+        literals: number of string constants changed.
+        path_imports: number of `Path` names now imported from this module.
+    """
     def __init__(self):
+        """Starts both counters at zero."""
         self.literals = 0
         self.path_imports = 0
 
     def visit_Constant(self, node):
+        """Returns the constant with old roots in a string value rebased."""
         if isinstance(node.value, str):
             new = rebase_text(node.value)
             if new != node.value:
@@ -119,6 +162,7 @@ class Relocate(ast.NodeTransformer):
         return node
 
     def visit_ImportFrom(self, node):
+        """Splits `from pathlib import Path, ...` so Path comes from `_tfb_ssd_runtime`."""
         if node.module == 'pathlib' and not node.level:
             paths = [n for n in node.names if n.name == 'Path']
             others = [n for n in node.names if n.name != 'Path']
@@ -130,6 +174,15 @@ class Relocate(ast.NodeTransformer):
 
 
 def _compile(source, filename, mode, flags=0, dont_inherit=False, optimize=-1, **kwargs):
+    """Compiles source like builtins.compile, after relocating it with Relocate.
+
+    Requests for an AST only (ast.PyCF_ONLY_AST) are passed through unchanged. When the transform
+    changes anything, an audit record (file, adapter hashes, original and adapted AST hashes,
+    source SHA256) is added to TRANSFORMS and appended to $TFB_SSD_AUDIT_LOG if that is set.
+
+    Returns:
+        A code object, or an AST for PyCF_ONLY_AST requests.
+    """
     if not dont_inherit:
         flags |= sys._getframe(1).f_code.co_flags & _FUTURE_FLAGS
     if flags & ast.PyCF_ONLY_AST:
@@ -158,6 +211,7 @@ def _compile(source, filename, mode, flags=0, dont_inherit=False, optimize=-1, *
 
 
 def _exec(source, globals=None, locals=None, *, closure=None):
+    """Runs exec() with the project builtins; str or bytes source goes through _compile first."""
     if globals is None:
         frame = sys._getframe(1)
         globals = frame.f_globals
@@ -172,13 +226,21 @@ def _exec(source, globals=None, locals=None, *, closure=None):
 
 
 def _open(file, *args, **kwargs):
+    """Opens a file at its remapped path; arguments as builtins.open."""
     return _NATIVE_OPEN(resolve(file), *args, **kwargs)
 
 
+# Builtins of project modules: compile, exec and open are the remapping versions above.
 PROJECT_BUILTINS = dict(vars(builtins), compile=_compile, exec=_exec, open=_open)
 
 
 def install():
+    """Installs the path layer in this interpreter; later calls do nothing.
+
+    Registers this module as `_tfb_ssd_runtime`, patches SourceFileLoader so project modules are
+    compiled through _compile and run with PROJECT_BUILTINS, patches runpy for scripts started
+    by multiprocessing spawn, and turns off writing of .pyc files.
+    """
     global _INSTALLED
     if _INSTALLED:
         return
@@ -188,12 +250,14 @@ def install():
     original_get_code, original_exec_module = loader.get_code, loader.exec_module
 
     def get_code(self, fullname):
+        """Returns the relocated code object of a project module; others load normally."""
         if not owned(self.path):
             return original_get_code(self, fullname)
         source = NativePath(resolve(self.path)).read_bytes()
         return _compile(source, str(resolve(self.path)), 'exec', dont_inherit=True)
 
     def exec_module(self, module):
+        """Runs a project module with PROJECT_BUILTINS; others run normally."""
         if not owned(self.path):
             return original_exec_module(self, module)
         module.__dict__['__builtins__'] = PROJECT_BUILTINS
@@ -211,6 +275,7 @@ def install():
     original_run_code = runpy._run_code
     def run_code(code, run_globals, init_globals=None, mod_name=None, mod_spec=None,
                  pkg_name=None, script_name=None):
+        """Recompiles a project script through _compile before runpy runs it."""
         filename = script_name or (getattr(mod_spec, 'origin', None) if mod_spec else None)
         if filename and owned(filename):
             actual = NativePath(resolve(filename))
@@ -223,6 +288,18 @@ def install():
 
 
 def main(args=None):
+    """Runs a program the way the python command does, with the path layer installed.
+
+    Accepted forms: leading -u, -B, -O, -OO, -q, -W, -X flags (the interpreter is re-executed with
+    them), no argument (interactive console), --version or -V, -c <code>, -m <module>, - (read
+    stdin) and <script> [args]. Script arguments are mapped with resolve().
+
+    Args:
+        args: command-line arguments after the interpreter name; defaults to sys.argv[1:].
+
+    Raises:
+        SystemExit: a -W or -X flag has no value, or another unsupported flag is given.
+    """
     args = list(sys.argv[1:] if args is None else args)
     install()
     # Re-exec the real interpreter so flags retain their normal Python semantics.

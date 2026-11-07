@@ -12,16 +12,29 @@
 #   3. stage1: FE site choice + A1 template on D12_I5_N, D12_I5_S, D7_I405_S
 #   4. key mapping to submission_id
 # Per-step logs: <run>/logs/onset/<step>.log (with /usr/bin/time -l).
+#
+# Names: "0922" marks the frozen onset model of 2026-09-22. "D" is the candidate
+# submission_D_onsetsite_blocks (site choice on the multi-site panels, block decoding elsewhere).
+# The u-models score each candidate bottleneck site of a window; FE is the within-window site choice
+# and A1 the train template of the queue extent at the chosen site.
 set -eu
 [ $# -eq 1 ] || { echo "usage: onset.sh <run_root>" >&2; exit 2; }
 RUN=$(cd "$1" && pwd -P)
 PKG=$(cd "$(dirname "$0")/.." && pwd -P)
 TFB="$PKG/bin/tfb-run"
+# TFB_PYTHON defaults to the pinned environment; run_reproduce.sh always sets it.
 export TFB_PYTHON="${TFB_PYTHON:-$HOME/.venvs/tfb-final-R26c/bin/python}"
+# Thread caps for OpenMP and the BLAS libraries (2 unless OMP_NUM_THREADS is set).
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-2}"
 export OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS" MKL_NUM_THREADS="$OMP_NUM_THREADS" VECLIB_MAXIMUM_THREADS="$OMP_NUM_THREADS"
 LOG="$RUN/logs/onset"; mkdir -p "$LOG"
 
+# Runs one program through bin/tfb-run and prints its wall time and peak memory.
+# Arguments:
+#   Step name (log file name), then a program path relative to trafficflowbench/ or "-c <code>",
+#   then the program's arguments.
+# Outputs:
+#   Log in $LOG/<name>.log; on failure the last 40 log lines go to stderr and the segment stops.
 step() {  # step <name> <program.py | -c code> [args...]
   name=$1; shift
   printf '[%s] %-14s %s\n' "$(date +%H:%M:%S)" "$name" "$*"

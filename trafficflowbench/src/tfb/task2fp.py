@@ -23,17 +23,34 @@ the learned rule and the rejected fixed-size rule act on the same objects.
 Every feature is computed from stage-1 output and the static network only. No
 label enters a feature.
 """
+#
+# Role in the package: a research record. It holds the stage-2
+# false-positive filter that was tested on the Task 2 out-of-fold
+# predictions; no program in this package imports it.
+#
+# Terms: stage 1 is the cell-level queue model (a probability per (window,
+# link, step) cell, thresholded to a 0/1 prediction). A component is a
+# connected group of predicted-queue cells in one window's (link x step)
+# image. A false-positive (FP) component touches no true queue cell.
+# notes/NN X and scripts/NN are development records that are not part of
+# this package.
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
 KEEP_TAU = 0.5          # declared in advance; the guardrail forbids sweeping it
+# Stage-2 booster: a small LightGBM binary classifier, fixed seed, deterministic.
 PARAMS = dict(boosting_type="gbdt", objective="binary", metric="binary_logloss",
               num_leaves=31, learning_rate=0.05, feature_fraction=0.9,
               bagging_fraction=0.8, bagging_freq=5, min_child_samples=20,
               verbose=-1, num_threads=0, seed=20260918, deterministic=True)
 NUM_BOOST_ROUND = 300
+# Interior descriptors of one component: size in cells, links and steps;
+# fill = cells / (links x steps) of its bounding box; stage-1 probability and
+# queue-prior statistics over its cells; milepost span and first / last
+# horizon step; and window counts (components, scored cells and predicted
+# cells in the window, and this component's share of the predicted cells).
 FEATURES = ["n_cells", "n_links", "n_steps", "fill", "prob_mean", "prob_max",
             "prob_min", "prob_std", "prior_mean", "prior_max", "milepost_span",
             "step_min", "step_max", "n_components", "window_cells",
@@ -54,6 +71,8 @@ CONTEXT_FEATURES = [
     "prob_rank_in_window", "prob_gap_to_best", "share_of_prob_mass",
     "milepost_rel", "step_span_frac",
 ]
+# The ring statistics again at dilation radii 2 and 4 (MULTISCALE_RADII),
+# plus how much the mean ring probability falls from radius 1 to radius 4.
 MULTISCALE_FEATURES = [f"ring{r}_{k}" for r in (2, 4)
                        for k in ("size", "prob_mean", "prior_mean", "minus_comp_prob")
                        ] + ["ring_falloff_1_4"]
@@ -83,6 +102,13 @@ MULTISCALE_RADII = (2, 4)
 
 def _context(img, lab, k, prob_img, prior_img, valid, multiscale: bool = False):
     """Features of the neighbourhood OUTSIDE component k. notes/18 B, notes/19 A."""
+    # img: the window's boolean prediction image (not read); lab: its
+    # component labels from ndimage.label; k: this component's label;
+    # prob_img / prior_img: stage-1 probability and queue prior per cell;
+    # valid: cells that exist in the window. The ring is the set of valid
+    # cells next to the component (dilation by one cell, no diagonals). Rows
+    # are links in milepost order: "up" reads the row just before the
+    # component's link span and "dn" the row just after, over its step span.
     from scipy import ndimage
     m = lab == k
     ring = ndimage.binary_dilation(m) & ~m & valid
@@ -131,6 +157,12 @@ def component_table(d: pd.DataFrame, pred: np.ndarray, with_label: bool = True,
     Returns (table, comp_of_row). comp_of_row is -1 for cells that are not
     predicted positive.
     """
+    # d: stage-1 rows with window_id, condition, milepost, step (1..6), prob,
+    # optional queue_prior and, when with_label, the 0/1 label. pred: the 0/1
+    # stage-1 decision per row of d. A window's image has one row per distinct
+    # milepost and one column per horizon step. context and multiscale add
+    # the CONTEXT_FEATURES and MULTISCALE_FEATURES columns. With labels, y = 1
+    # when the component holds any true queue cell and n_true counts them.
     from scipy import ndimage
     comp_of_row = np.full(len(d), -1, dtype=np.int64)
     prob = d.prob.to_numpy()
@@ -210,6 +242,9 @@ def component_table(d: pd.DataFrame, pred: np.ndarray, with_label: bool = True,
 
 def fit(tbl: pd.DataFrame, features: list[str] | None = None):
     """One booster per condition. Returns {condition: model}."""
+    # tbl: component_table output with labels. A condition with fewer than 50
+    # components or a single label class gets None, which the filters read as
+    # "keep every component".
     import lightgbm as lgb
     feats = FEATURES if features is None else features
     out = {}
@@ -225,6 +260,8 @@ def fit(tbl: pd.DataFrame, features: list[str] | None = None):
 def apply_filter(d: pd.DataFrame, pred: np.ndarray, models: dict,
                  tau: float = KEEP_TAU, features: list[str] | None = None) -> np.ndarray:
     """Drop components the classifier scores below ``tau``."""
+    # d / pred as in component_table, models from fit. Returns a copy of pred
+    # with the dropped components set to 0 (pred itself when nothing drops).
     feats = FEATURES if features is None else features
     need_ctx = any(f in feats for f in CONTEXT_FEATURES)
     need_ms = any(f in feats for f in MULTISCALE_FEATURES)
@@ -288,6 +325,9 @@ def apply_expected_iou(d: pd.DataFrame, pred: np.ndarray, models: dict,
     Each component is judged against the full prediction rather than sequentially,
     so the rule carries no ordering and no threshold.
     """
+    # q is the classifier's probability that a component touches the truth
+    # (1 when the condition has no model). Returns a copy of pred with the
+    # dropped components set to 0 (pred itself when nothing drops).
     need_ctx = any(f in features for f in CONTEXT_FEATURES)
     need_ms = any(f in features for f in MULTISCALE_FEATURES)
     tbl, comp_of_row = component_table(d, pred, with_label=False, context=need_ctx,

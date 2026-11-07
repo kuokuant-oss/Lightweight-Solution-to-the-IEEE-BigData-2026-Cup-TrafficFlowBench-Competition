@@ -6,6 +6,8 @@ refit-N6 F2 decision d1 on every official ongoing row (guard window = A-block de
 (review_20260929_target092/main/ongoing_refitN6_d1.parquet) onto the rows of serving_stage/<split>_SUBMISSION_MAP
 exactly as r16b_bits() maps the CSV column, and saves the same structure: int8 arrays keyed validation, private.
 """
+# Runs in pipeline/ongoing.sh ("r16b_bits"), after serving_stage/prepare.py.
+# Output: R16b_ongoing_bits.npz (int8 decision per SUBMISSION_MAP row).
 import numpy as np, pandas as pd
 from pathlib import Path
 HERE = Path(__file__).resolve().parent

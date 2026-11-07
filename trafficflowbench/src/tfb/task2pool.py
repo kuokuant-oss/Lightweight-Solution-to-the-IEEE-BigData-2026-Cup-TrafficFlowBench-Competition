@@ -44,6 +44,21 @@ horizon at all, which ``requires_queue_in_horizon`` forbids and the enumeration
 here rejects. 79 of the 80 reproduce exactly, condition, coverage,
 persistence IoU and n_true included.
 """
+#
+# Role in the package: date_of is used throughout the Task 2 code (the queue
+# prior builders, and the ongoing serving geometry builders run by
+# pipeline/ongoing.sh). The rest is the validation_v3 window sampler, kept as
+# the record of how the local Task 2 validation window sets were drawn from
+# train days. scripts/36, 50, 63 and 65 are development records that are not
+# part of this package.
+#
+# Window layout used here: `origin` is the grid column of the forecast time T.
+# The history is the 12 columns t-12..t-1 (60 minutes) and the horizon the 6
+# columns t+1..t+6 (30 minutes). A cell is queued when it is score-eligible
+# and its speed is at or below the link's v_cut (score2.v_cut). A window is
+# "queue_ongoing" when any history cell is queued and "queue_onset"
+# otherwise. The persistence baseline repeats the last history column over
+# the horizon.
 from __future__ import annotations
 
 import json
@@ -54,13 +69,20 @@ import pandas as pd
 
 from . import release as R, score2
 
+# History and horizon lengths in 5-minute steps (60 and 30 minutes).
 HIST, HOR = 12, 6
+# Minutes per grid step.
 STEP_MIN = 5
 
 
 @dataclass(frozen=True)
 class Rules:
     """The task2 selector rules, as released."""
+    # Fields mirror the task2 block of synthetic_release_v1.json: windows per
+    # panel and split for each condition, whether the horizon must contain a
+    # queue, the minimum eligible share of the history, the maximum IoU the
+    # persistence baseline may reach, and the minimum spacing between two
+    # windows of the same (panel, date), in minutes.
 
     onset_per_panel: int
     ongoing_per_panel: int
@@ -71,12 +93,15 @@ class Rules:
 
     @property
     def spacing_steps(self) -> int:
+        """Minimum spacing between two windows of one (panel, date), in steps."""
         return self.spacing_minutes // STEP_MIN
 
     def quota(self) -> dict[str, int]:
+        """Returns condition -> windows per panel and split."""
         return {"queue_onset": self.onset_per_panel, "queue_ongoing": self.ongoing_per_panel}
 
     def as_series(self) -> pd.Series:
+        """Returns the rules plus the history and horizon lengths as a Series."""
         return pd.Series({
             "onset_per_panel": self.onset_per_panel,
             "ongoing_per_panel": self.ongoing_per_panel,
@@ -90,6 +115,7 @@ class Rules:
 
 
 def rules() -> Rules:
+    """Reads the task2 selector rules from the official synthetic_release_v1.json."""
     cfg = json.loads((R.OFFICIAL / "config" / "synthetic_release_v1.json").read_text(encoding="utf-8"))["task2"]
     return Rules(
         onset_per_panel=int(cfg["queue_onset_windows_per_panel_split"]),
@@ -102,6 +128,7 @@ def rules() -> Rules:
 
 
 def panels() -> list[str]:
+    """Returns the release panels that have a task2 folder."""
     return [p for p in R.panels() if (R.RELEASE / "task2" / p).is_dir()]
 
 
@@ -112,6 +139,10 @@ def window_id(panel: str, date: str, origin: int) -> str:
 
 def day_queue_matrices(panel: str, path, cut: dict[str, float]) -> tuple[np.ndarray, np.ndarray]:
     """(link x time) queue / eligibility for one day -- scripts/36.day_matrices."""
+    # Reads one train truth day file. Links are in link_id order here, not
+    # milepost order. `cut` maps link_id -> v_cut in km/h; a missing link uses
+    # 63 km/h (0.60 x 105 km/h, score2.v_cut's default). Returns the boolean
+    # queued-and-eligible matrix and the eligibility matrix.
     f = pd.read_parquet(path, columns=["timestamp", "link_id", "speed_kmh", "is_score_eligible"])
     f["link_id"] = f.link_id.astype(str)
     links = sorted(f.link_id.unique())
@@ -130,6 +161,7 @@ def day_queue_matrices(panel: str, path, cut: dict[str, float]) -> tuple[np.ndar
 
 
 def date_of(path) -> str:
+    """Returns the date in a synthetic_mainline_YYYY_MM_DD.parquet name as YYYY-MM-DD."""
     return path.name[len("synthetic_mainline_"):-len(".parquet")].replace("_", "-")
 
 
@@ -143,6 +175,11 @@ def enumerate_candidates(dates: set[str], rule: Rules | None = None,
     the ones scripts/36 emits, which lets scripts/65 diff this enumeration
     against the frozen m7 candidate table cell by cell.
     """
+    # Args: dates (YYYY-MM-DD) to scan, the rules (official by default), the
+    # panels (all task2 panels by default) and a progress switch. Returns one
+    # row per legal (panel, date, origin) with its condition, history coverage,
+    # persistence IoU, queued horizon cells (n_true) and scored horizon cells
+    # (n_scored), sorted by panel, date and origin.
     rule = rule or rules()
     out = []
     for panel in (panel_list or panels()):
@@ -153,6 +190,8 @@ def enumerate_candidates(dates: set[str], rule: Rules | None = None,
                 continue
             Q, E = day_queue_matrices(panel, path, cut)
             nT = Q.shape[1]
+            # History columns t-12..t-1, horizon t+1..t+6; column t (the
+            # forecast time T) belongs to neither.
             for t in range(HIST, nT - HOR):
                 hs, he = t - HIST, t
                 fs, fe = t + 1, t + 1 + HOR
@@ -189,6 +228,9 @@ def official_windows(split: str = "train") -> pd.DataFrame:
     Verified by the condition column agreeing on all 80 and history_coverage
     matching to 5e-05 (the release rounds it to four places).
     """
+    # Only train ships truth days, so windows of another split find no day
+    # file and are skipped. Returns one row per matched window with the
+    # columns of enumerate_candidates plus window_id.
     idx = score2.window_index(split)
     idx = idx.assign(origin_ts=pd.to_datetime(idx.forecast_origin, utc=True))
     out = []
@@ -231,6 +273,7 @@ def difficulty(win: pd.DataFrame) -> pd.DataFrame:
 
 
 def spacing_ok(origins: list[int], origin: int, spacing_steps: int) -> bool:
+    """True when `origin` is at least `spacing_steps` from every origin in `origins`."""
     return all(abs(origin - o) >= spacing_steps for o in origins)
 
 
@@ -252,6 +295,9 @@ def empty_horizon_candidates(dates: set[str], rule: Rules | None = None,
     here and a replicate mode that injects such a window at the observed 1-in-80
     rate, so a candidate's delta can be read with and without them.
     """
+    # Lifts the queue-in-horizon requirement and the persistence IoU ceiling,
+    # keeps the onset candidates with no queued horizon cell, and samples at
+    # most k_per_cell of them per (panel, date).
     import dataclasses
     rule = rule or rules()
     relaxed = dataclasses.replace(rule, requires_queue_in_horizon=False, max_persistence_iou=1.01)
@@ -278,6 +324,9 @@ def inject_empty_horizon(man: pd.DataFrame, pool: pd.DataFrame, seed: int, n: in
     shape the released exception has: it occupies an onset slot on a date its
     panel was already using.
     """
+    # man: a manifest from sample_manifest; pool: empty_horizon_candidates
+    # output; seed fixes which onset windows are tried first and which
+    # replacement is drawn.
     rule = rule or rules()
     if n <= 0 or pool.empty:
         return man
@@ -313,6 +362,9 @@ def chain_windows(cand: pd.DataFrame, rule: Rules | None = None) -> pd.DataFrame
     before using it as the calib set, which keeps control's thresholds exactly
     the frozen ones.
     """
+    # cand: enumerate_candidates output. Per (panel, date) keeps the earliest
+    # candidate and then every next one at least spacing_steps after the last
+    # kept one, whatever its condition and with no quota.
     rule = rule or rules()
     keep = []
     for _, g in cand.groupby(["panel", "date"], sort=True):
@@ -327,6 +379,7 @@ def chain_windows(cand: pd.DataFrame, rule: Rules | None = None) -> pd.DataFrame
     return d
 
 
+# Day-reading variants of sample_manifest (see its docstring).
 MODES = ("chain_reach", "scan")
 
 
@@ -365,6 +418,10 @@ def sample_manifest(cand: pd.DataFrame, seed: int, rule: Rules | None = None,
     Both control and candidate are scored on the same windows, so this biases
     the absolute level, not the paired delta.
     """
+    # cand: enumerate_candidates output; seed picks the start date of each
+    # panel's walk, which wraps around to the earliest dates after the last.
+    # Returns the manifest with window_id and family_id, sorted by panel, date
+    # and origin.
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
     rule = rule or rules()
@@ -382,6 +439,7 @@ def sample_manifest(cand: pd.DataFrame, seed: int, rule: Rules | None = None,
         taken: dict[str, list[int]] = {d: [] for d in avail}
 
         def keep(date: str, row) -> None:
+            """Records one chosen window and lowers its condition's remaining quota."""
             taken[date].append(int(row.origin))
             need[row.condition] -= 1
             rows.append({"panel": panel, "date": date, "origin": int(row.origin),

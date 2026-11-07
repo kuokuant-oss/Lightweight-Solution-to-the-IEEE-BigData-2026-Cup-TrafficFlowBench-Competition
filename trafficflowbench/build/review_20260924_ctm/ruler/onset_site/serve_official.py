@@ -2,6 +2,12 @@
 (a) pseudo-val onset windows (re-check) and (b) OFFICIAL validation/private onset windows.
 Legal inputs per window: official window_history (T-60..T-5) + masked layer at T (origin timestamp).
 Output: site scores per window and a modified onset component (prod_else_tpl decoder) for multi-site panels."""
+#
+# Role: official_rows, score_rows and decode are imported by pipeline/onset_c3.py (reproduction pipeline,
+# onset.sh step 2), which scores with the frozen u-models and templates (u_models_C1.0.pkl). onset_c3.py points
+# HERE to a folder whose cache/ holds the masked-layer caches of both official splits (cache/build_cache.py). The
+# __main__ block is the record of how the models, templates and the site-choice component were made.
+# Usage (record): serve_official.py [C]   (C: inverse regularisation strength of the logistic models)
 import sys, pickle, numpy as np, pandas as pd, warnings
 from pathlib import Path
 from sklearn.linear_model import LogisticRegression
@@ -16,18 +22,28 @@ from uncond import build_train, series_feats
 from eval_template import templates
 REL = Path('/Volumes/Crucial X9/trafficflow/tfb_competition_data/kaggle_public')
 ROOT = Path('/Volumes/Crucial X9/trafficflow/trafficflowbench')
+# MULTI: panels with more than one onset site. COLS: model inputs (bn-ratio series features and the 5-minute
+# phase one-hot ph0..ph5).
 MULTI = ['D12_I5_N', 'D12_I5_S', 'D7_I210_W', 'D7_I405_S']
 COLS = ['r6', 'rT', 'r3', 'r12', 'dr', 'rmx3', 'ph0', 'ph1', 'ph2', 'ph3', 'ph4', 'ph5']
+# C is read from the command line at import time (1.0 when no argument is given).
 C = float(sys.argv[1]) if len(sys.argv) > 1 else 1.0
 
 
 def addph(X):
+    """Adds ph = T modulo 6 (5-minute phase of T within each half hour) and its one-hot columns ph0..ph5."""
     X['ph'] = (X['T'] + 6) % 6
     for k in range(6): X[f'ph{k}'] = (X.ph == k).astype(float)
     return X
 
 
 def fit_models():
+    """Fits one model per (panel, site) on the train pairs of uncond.build_train.
+
+    Returns:
+        {(panel, site): ('lr', scaler + logistic regression, feature medians)} or ('const', positive rate,
+        medians) for sites with fewer than 5 train onsets.
+    """
     models = {}
     for panel in MULTI:
         d = addph(build_train(panel))
@@ -40,6 +56,7 @@ def fit_models():
 
 
 def score_rows(rows, models):
+    """Returns rows with column u: the breakdown hazard of each (window, site) from its model (NaN-filled with medians)."""
     rows = addph(rows.copy()); rows['u'] = np.nan
     for (panel, s), (kind, m, med) in models.items():
         ix = (rows.panel == panel) & (rows.site == s)
@@ -49,6 +66,17 @@ def score_rows(rows, models):
 
 
 def official_rows(split):
+    """Builds one row per official onset window and site of the multi-site panels.
+
+    Uses the window's released history (flows at T-60..T-5) and the masked layer at the origin stamp T from
+    cache/<panel>_<split>.npz; features are series_feats of the bottleneck links' flow / capacity ratio.
+
+    Args:
+        split: 'validation' or 'private'.
+
+    Returns:
+        DataFrame with split, panel, key (window_id), date, T (origin step of the day), site and the features.
+    """
     out = []
     for panel in MULTI:
         wi = pd.read_csv(REL / 'task2' / panel / split / 'window_index.csv'); wi = wi[wi.condition == 'queue_onset']
@@ -75,6 +103,9 @@ def official_rows(split):
 
 def decode(comp, choice, tpl, thr=0.5):
     """comp: onset component rows (step 6) with prob/queue_pred; returns modified copy (prod_else_tpl)."""
+    # choice: window_id -> set of sites to keep; tpl: queue-extent templates. Inside the chosen sites the
+    # production prediction is kept; when it is empty, template links with share >= thr; when still empty, the
+    # most probable link of the chosen sites. Train-cache link order maps link ids to site indices.
     q = comp.copy()
     LI = {}
     for panel in MULTI:

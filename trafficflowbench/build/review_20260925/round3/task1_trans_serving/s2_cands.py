@@ -5,6 +5,10 @@ clean labels, temporal interpolation).
                                   ruler2/cands_v2.parquet for those panels (harness proof)
   s2_cands.py private             private, fill = PARENT private state rows -> work/cands_private.parquet
                                   (+ work/parent_private_state.parquet: parent state rows keyed by panel/timestamp/link)"""
+# Task 1 reproduction pipeline, step 5 (`pipeline/task1.sh`, log
+# `cands_private`, mode private). PARENT is the state stand-in of the G1_FE_A1
+# submission CSV written by pipeline/task1_state_csv.py; its private state
+# fills the Task 1 target cells before the queue labels are computed.
 import os, sys, glob, json, time
 sys.dont_write_bytecode = True
 import numpy as np, pandas as pd
@@ -15,10 +19,16 @@ REL = Path('/Volumes/Crucial X9/trafficflow/tfb_competition_data/kaggle_public')
 RUL = ROOT / 'build/review_20260924_ctm/ruler'
 PARENT = ROOT / 'build/review_20260925/round2/synthesis/submission_G1_FE_A1.csv'
 PANELS = ['D7_I10_E', 'D7_I10_W', 'D7_I210_E', 'D7_I210_W', 'D7_I405_N', 'D7_I405_S', 'D12_I5_N', 'D12_I5_S']
+# Train co-switching blocks, used for the block-mate majority labels.
 B = np.load(RUL / 'blocks/my_blocks.npy', allow_pickle=True).item()
 
 
 def parent_state(split):
+    """Returns the parent's state rows of a split, keyed by panel, timestamp and link.
+
+    Columns: submission_id, panel, timestamp, link_id, speed_kmh, flow_vph.
+    Cached in work/parent_<split>_state.parquet.
+    """
     out = HERE / 'work' / f'parent_{split}_state.parquet'
     if out.exists(): return pd.read_parquet(out)
     parts = []
@@ -37,6 +47,29 @@ def parent_state(split):
 
 
 def day_cands(panel, path, cpk, vcut_map):
+    """Lists the candidate window origins of one masked day.
+
+    Target cells (eligible and blank, outside the stamps that are blank on
+    every link, i.e. the official Task 2 holes) take the fill speed. A cell
+    is queued when its speed is at most vcut; a missing cell takes the
+    majority label of its observed block-mates, else its speed interpolated
+    in time. Every origin t whose slots t-12 .. t+6 avoid the holes is a
+    candidate.
+
+    Args:
+      panel: corridor name.
+      path: masked mainline day file.
+      cpk: fill values indexed by (timestamp, link_id).
+      vcut_map: link_id -> queue speed threshold (0.6 x free-flow, km/h).
+
+    Returns:
+      (rows, log). rows: (panel, date, t, cov, hist_any, last_any, hor_any,
+      piou, first); cov: eligible share of the 12 history slots; hist_any:
+      an observed queue in the history; last_any: observed queues in both of
+      the last two history slots; hor_any: a queue in t+1 .. t+6; piou: IoU
+      of persistence (the queue at t held 6 steps) with the horizon; first:
+      first horizon step with a queue (0 = none). log: fill counts of the day.
+    """
     d = pd.read_parquet(path); d['link_id'] = d.link_id.astype(str); date = str(d.date.iloc[0])
     ts_null = d.groupby('timestamp').speed_kmh.apply(lambda s: s.isna().all()); gap_ts = set(ts_null[ts_null].index)
     target = (d.is_score_eligible == 1) & d.speed_kmh.isna() & ~d.timestamp.isin(gap_ts)
@@ -72,6 +105,17 @@ def day_cands(panel, path, cpk, vcut_map):
 
 
 def run(split, panels, champ):
+    """Lists the candidate origins of every day of the given panels.
+
+    Args:
+      split: 'validation' or 'private'.
+      panels: corridor names.
+      champ: state rows (panel, timestamp, link_id, speed_kmh, flow_vph)
+        that fill the target cells.
+
+    Returns:
+      (candidate frame, per-day log frame).
+    """
     rows, logs = [], []
     for panel in panels:
         links_csv = pd.read_csv(REL / 'corridors' / panel / 'network' / 'links.csv', dtype={'link_id': str})
@@ -87,6 +131,7 @@ def run(split, panels, champ):
 
 
 def main():
+    """Runs the `check` or `private` mode (see the module docstring)."""
     mode = sys.argv[1]; t0 = time.time()
     if mode == 'check':
         panels = sys.argv[2:]

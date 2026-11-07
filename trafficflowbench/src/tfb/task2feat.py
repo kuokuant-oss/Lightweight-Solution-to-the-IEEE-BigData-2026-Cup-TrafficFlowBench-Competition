@@ -18,6 +18,21 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+# Role: runs in the reproduction pipeline. task2infer.features_for_split calls
+# build_window_features for every validation and private window, and the
+# training tables were built with the same functions.
+#
+# Array layout: V, Q_, O_, E are (n_links x n_stamps) arrays of speed (km/h),
+# flow (veh/h), occupancy and score eligibility, links in milepost order.
+# Features read only the history columns given by `hist_slice` (the 12 stamps
+# T-60..T-5 before the forecast time T), static link data, ramp flows at the
+# last history stamp, the time-of-day prior table and, when supplied, the
+# task2origin block of observations at T. No horizon column is read.
+#
+# HIST: history length in 5-minute steps. HOR: forecast horizon in steps.
+# DT_H: one step in hours. C_CONG_KMH: assumed speed of a congested front
+# moving upstream (km/h). NEIGHBOUR_HOPS: link offsets of the neighbour
+# features.
 HIST, HOR = 12, 6
 DT_H = 5.0 / 60.0
 C_CONG_KMH = -15.0          # notes/01 A
@@ -25,6 +40,19 @@ NEIGHBOUR_HOPS = (1, 2, 4)
 
 
 def static_table(panel: str, links: list[str], grid_mod, release_mod) -> pd.DataFrame:
+    """Builds the static per-link attribute table of one panel.
+
+    Args:
+        panel: Corridor name, e.g. ``D7_I210_W``.
+        links: Link ids in the row order of the day arrays (milepost order).
+        grid_mod: The ``tfb.grid`` module.
+        release_mod: The ``tfb.release`` module.
+
+    Returns:
+        DataFrame indexed by link id with lanes (at least 1), free_speed
+        (km/h), capacity (veh/h), length_km and v_cut, the queue threshold
+        speed 0.60 x free_speed (km/h).
+    """
     lo = grid_mod.link_order(panel).set_index("link_id").reindex(links)
     mp = release_mod.network(panel, "links").set_index("link_id").reindex(links)
     out = pd.DataFrame(index=links)
@@ -46,6 +74,16 @@ def ramp_vectors(panel: str, links: list[str], milepost: np.ndarray,
     changes nothing else. Default False keeps every existing caller -- scripts
     50/51, the frozen model and the validation_v3 self-check -- bit-identical.
     """
+    # `milepost`: per-link mileposts in the order of `links`.
+    # `ramp_flow_at_T`: ramp_link_id -> flow (veh/h) at one stamp; callers pass
+    # the last history stamp T-5. `attach`: the released ramp_attachment_map
+    # (ramp -> nearest mainline link; ramp_type "OR" is an on-ramp, any other
+    # type counts as an off-ramp). `sgn`: +1 when traffic moves toward
+    # increasing milepost, -1 otherwise.
+    # Returns per-link arrays: onramp_flow and offramp_flow (veh/h summed over
+    # attached ramps), onramp_flow_upstream (on-ramp flow summed over all links
+    # upstream of this one) and dist_to_onramp_km (NaN when the panel has no
+    # on-ramp attachment).
     li = {k: i for i, k in enumerate(links)}
     n = len(links)
     on = np.zeros(n)
@@ -99,6 +137,7 @@ def _oblique(on: np.ndarray, on_up: np.ndarray, milepost: np.ndarray,
     span = float(milepost[-1] - milepost[0])
     if not np.isfinite(span) or span <= 0:
         return on_up.copy()
+    # q0: background on-ramp inflow per km of corridor in this window.
     q0 = float(np.nansum(on)) / span
     # distance travelled from the corridor's UPSTREAM end, which is milepost[0]
     # only when traffic runs toward increasing milepost.
@@ -115,7 +154,11 @@ def newell_table(panel: str, links: list[str], grid_mod) -> dict[str, np.ndarray
     The congested wave speed follows from the same three numbers,
     w = qc / (kj - kc), so nothing is calibrated or tuned here.
     """
+    # Returns per-link arrays: vf free-flow speed (km/h), qc capacity (veh/h),
+    # kc critical density and kj jam density (veh/km), w congested wave speed
+    # (km/h); NaN where the link table lacks a value.
     lo = grid_mod.link_order(panel).set_index("link_id").reindex(links)
+    # num(c): column c of the link table as a float array.
     num = lambda c: pd.to_numeric(lo[c], errors="coerce").to_numpy(dtype=float)
     vf, qc, kc, kj = num("free_speed_kmh"), num("capacity_vph"), num("critical_density"), num("k_jam")
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -157,6 +200,10 @@ def newell_vectors(fd: dict[str, np.ndarray], milepost: np.ndarray, V: np.ndarra
     notes/16 A item 2 requires the min and the gap to be explicit: an
     axis-parallel GBDT cannot form min(a, b) from a and b given separately.
     """
+    # Reads only column `t_last` (the last history stamp, T-5) of V and Q_.
+    # `fd` is the newell_table output; `sgn` orients upstream and downstream.
+    # Returns per-link newell_demand, newell_supply, their minimum
+    # (newell_min) and demand minus supply (newell_gap), all in veh/h.
     with np.errstate(divide="ignore", invalid="ignore"):
         k = np.where(V > 1.0, Q_ / V, np.nan)          # veh/km, guarded at crawl speed
     dt = DT_H
@@ -164,6 +211,8 @@ def newell_vectors(fd: dict[str, np.ndarray], milepost: np.ndarray, V: np.ndarra
     up_km = fd["vf"] * dt                               # free-flow reach in one step
     dn_km = fd["w"] * dt                                # congested reach in one step
     n = len(milepost)
+    # iu: link one free-flow step upstream; idn: link one congested-wave step
+    # downstream. searchsorted needs `milepost` in ascending order.
     iu = np.searchsorted(milepost, milepost - sgn * up_km).clip(0, n - 1)
     idn = np.searchsorted(milepost, milepost + sgn * dn_km).clip(0, n - 1)
     with np.errstate(invalid="ignore"):
@@ -178,6 +227,8 @@ def newell_vectors(fd: dict[str, np.ndarray], milepost: np.ndarray, V: np.ndarra
 
 def shift_rows(a: np.ndarray, k: int) -> np.ndarray:
     """Shift along the link axis by k, NaN-filled. k>0 pulls from upstream."""
+    # Row i of the result holds row i-k of `a`; with links in milepost order
+    # and sgn = +1, k > 0 reads the lower-milepost neighbour.
     out = np.full_like(a, np.nan)
     if k > 0:
         out[k:] = a[:-k]
@@ -204,14 +255,32 @@ def build_window_features(V, Q_, O_, E, links, milepost, static, ramps,
     V/Q_/O_/E are (n_links x n_times) speed / flow / occupancy / eligibility.
     hist_slice is the (start, end) column range of the released history.
     """
+    # Other args: `links`/`milepost` give the link order; `static` is the
+    # static_table frame; `ramps` the ramp_vectors dict; `queue_prior` a
+    # (n_links x n_times) historical queue rate by time-of-day slot;
+    # `origin_col` the slot or grid column of the forecast time T; `n_times`
+    # the stamps per day (288). Optional blocks: `newell_fd` (newell_table),
+    # `wave_w` (per-link wave speed, km/h), `spatial_w` ((W_up, W_dn) from
+    # task2spatial), `time_oblique` / `accumulation` / `dispersion` (task2cum),
+    # `clock` (explicit time-of-day columns) and `origin` (task2origin block
+    # of observations at T). `sgn`: +1 when traffic moves toward increasing
+    # milepost, -1 otherwise.
+    # Time rule: values come from history columns hs..he-1 (T-60..T-5), static
+    # data, the prior table, ramp flows passed in, or the origin-T block.
+    # Returns one row per (link, step), step 1..HOR, with the per-link
+    # features plus step, step_min, queue_prior, margin_shock and
+    # queued_shock for that step.
     hs, he = hist_slice
     t_last = he - 1
     vcut = static["v_cut"].to_numpy()
+    # margin: speed divided by the queue threshold v_cut; <= 1 means queued.
     with np.errstate(invalid="ignore"):
         margin_hist = V[:, hs:he] / vcut[:, None]
     v_last = V[:, t_last]
     margin_last = v_last / vcut
 
+    # Per-link features shared by all horizon steps. trend_*_k: change over
+    # the last k stamps (k x 5 minutes); *_hist: over the 12-stamp history.
     base = {
         "speed_origin": v_last,
         "flow_origin": Q_[:, t_last],
@@ -259,9 +328,12 @@ def build_window_features(V, Q_, O_, E, links, milepost, static, ramps,
         # absent from every shipped model. NaN where the masked layer does not
         # show the cell; origin_obs_mask carries that explicitly.
         base.update(origin)
+    # Corridor-wide context repeated on every link: number of queued links and
+    # total mainline flow at the last history stamp.
     base["n_queued_corridor"] = np.full(len(links), float((v_last <= vcut).sum()))
     base["mainline_flow_corridor"] = np.full(len(links), float(np.nansum(Q_[:, t_last])))
 
+    # One copy of the per-link frame per horizon step, plus step columns.
     frame = pd.DataFrame(base, index=pd.Index(links, name="link_id"))
     rows = []
     for step in range(1, HOR + 1):

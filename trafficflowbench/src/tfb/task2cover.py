@@ -42,6 +42,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+# Role: no program of the reproduction pipeline imports this module; it is the
+# record of the training-window fill rule.
+# TARGET: windows wanted per (panel, condition) cell. MIN_GAP: smallest gap in
+# 5-minute steps between two origins on one (panel, date). MAX_PER_DATE: most
+# additions per (cell, date).
 TARGET = 350
 MIN_GAP = 12            # steps, 60 minutes
 MAX_PER_DATE = 4
@@ -51,6 +56,13 @@ def fill(cand: pd.DataFrame, base: pd.DataFrame, target: int = TARGET,
          min_gap: int = MIN_GAP, max_per_date: int = MAX_PER_DATE,
          seed: int = 20260921) -> pd.DataFrame:
     """``base`` plus enough extra candidate windows to reach ``target`` per cell."""
+    # `cand`: every candidate window (task2pool.enumerate_candidates columns).
+    # `base`: the existing chain windows. `seed` fixes the random order of
+    # dates before the stable fewest-selected-first sort, so ties are broken
+    # reproducibly.
+    # Returns the base rows (source="chain") plus the added rows
+    # (source="fill"), sorted by panel, date and origin. The selection reads
+    # only dates and origins.
     rng = np.random.default_rng(seed)
     cols = ["panel", "date", "origin", "condition", "history_coverage",
             "persistence_iou", "n_true", "n_scored"]
@@ -65,6 +77,7 @@ def fill(cand: pd.DataFrame, base: pd.DataFrame, target: int = TARGET,
     have = base.groupby(["panel", "condition"]).size()
     pool = cand[cols].copy()
     key = pd.MultiIndex.from_arrays([pool.panel, pool.date, pool.origin])
+    # Candidates already in the chain are removed from the pool.
     bkey = set(zip(base.panel, base.date.astype(str), base.origin.astype(int)))
     pool = pool[[k not in bkey for k in zip(pool.panel, pool.date.astype(str),
                                             pool.origin.astype(int))]]
@@ -80,6 +93,8 @@ def fill(cand: pd.DataFrame, base: pd.DataFrame, target: int = TARGET,
         rng.shuffle(order)
         # fewest-already-selected first: dates the chain never used come first
         order.sort(key=lambda d: len(taken.get((panel, d), [])))
+        # Round robin over dates: each pass adds at most one window per date,
+        # until the cell reaches `target` or no date can add another.
         progress = True
         while need > 0 and progress:
             progress = False
@@ -120,6 +135,12 @@ def fill(cand: pd.DataFrame, base: pd.DataFrame, target: int = TARGET,
 
 
 def report(win: pd.DataFrame) -> pd.DataFrame:
+    """Counts windows per (panel, condition).
+
+    Returns:
+        DataFrame with n (windows), dates (distinct dates) and, when ``win``
+        has a ``source`` column, the chain and fill counts.
+    """
     g = win.groupby(["panel", "condition"])
     out = g.agg(n=("origin", "size"), dates=("date", "nunique")).reset_index()
     if "source" in win.columns:

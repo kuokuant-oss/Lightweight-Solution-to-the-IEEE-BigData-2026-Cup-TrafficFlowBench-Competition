@@ -8,17 +8,25 @@ Inputs per day (all L x T, links in milepost order):
   vf, ln, Lk: free speed, lanes (score1.lanes_by_key, >=1), link length -- length-L vectors
   tg       : boolean mask of the cells to featurise (non-hole Task-1 targets)
 No IDs.  F = observed value where finite, else the C1 field."""
+#
+# RL: the residual LightGBM correction of the Task 1 fill; RLB: the same model with the block features below
+# added. Here C1 is the stacked Task 1 fill that the residual model corrects. "Shock" means the deviation of a
+# cell from the mean of its own link at t-2, t-1, t+1 and t+2, a local temporal baseline.
+# Role: imported by rl/serve_feats.py (reproduction pipeline, task1.sh step 1) and by rl/rl_eval.py (record).
 import json
 import numpy as np
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+# FEATS: names and column order of the RL model's features.
 FEATS = json.load(open(HERE / 's18_feats.json'))
+# BANDS: link-distance bands |d| (in links) for the long-range shock means.
 BANDS = ((4, 8), (9, 16), (17, 32), (33, 400))
 
 
 def sh(x, dl, dt):
     """value at (l+dl, t+dt) aligned to (l, t); NaN outside."""
+    # dl > 0 reads a downstream link (index grows downstream), dt > 0 a later 5-minute step.
     y = np.full(x.shape, np.nan, dtype=float); L, T = x.shape
     ls = slice(max(dl, 0), L + min(dl, 0)); ld = slice(max(-dl, 0), L + min(-dl, 0))
     ts = slice(max(dt, 0), T + min(dt, 0)); td = slice(max(-dt, 0), T + min(-dt, 0))
@@ -27,6 +35,8 @@ def sh(x, dl, dt):
 
 def band_means(S, O):
     """S: shock field (nan where not observed); O: observed mask. (side, lo) -> mean over rows l+d, |d| in band."""
+    # Prefix sums over links give each band mean in O(1) per cell. Keys: (side, lo) with side +1 = downstream
+    # links l+lo..l+hi and -1 = upstream links l-hi..l-lo; 'all' = all links except |d| <= 3.
     L = S.shape[0]; val = np.where(O, S, 0.0); cnt = O.astype(float)
     cs = np.vstack([np.zeros((1, S.shape[1])), np.cumsum(val, 0)]); cc = np.vstack([np.zeros((1, S.shape[1])), np.cumsum(cnt, 0)])
     idx = np.arange(L)
@@ -44,6 +54,7 @@ def band_means(S, O):
 
 
 def _tmean(F):
+    """Returns the per-cell mean of F at t-2, t-1, t+1 and t+2 (the local temporal baseline), ignoring NaN."""
     import warnings
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
@@ -52,6 +63,15 @@ def _tmean(F):
 
 def day_features(v1, q1, ov, oq, oo, vf, ln, Lk, tg):
     """dict of 1-D float32 arrays (one entry per True cell of tg, row-major order == np.where(tg))."""
+    # Feature groups (all relative, so one model serves every link):
+    #   p_*            C1 speed, per-lane flow, per-lane density (q/v) and speed / free-flow speed
+    #   vf/lanes/len/tod  link constants and the 5-minute step of the day
+    #   own_sh*        C1 minus the local temporal baseline
+    #   d*_t+-h        value at t+-h minus C1; ob_*: neighbour cell is observed
+    #   d*_x+-d, sh*_x, occ_x  neighbour links +-1, +-2 (value minus C1, their shock, their occupancy)
+    #   d*_x+-dt+-h    diagonal neighbours (adjacent link, adjacent step)
+    #   lr_*           long-range shock means per distance band, up- and downstream, at t-1, t, t+1
+    # F: observed value where finite, else the C1 field.
     vf = np.asarray(vf, float)[:, None]; ln = np.asarray(ln, float)[:, None]; Lk = np.asarray(Lk, float)[:, None]
     isob = np.isfinite(ov) & np.isfinite(oq)
     Fv = np.where(isob, ov, v1); Fq = np.where(isob, oq, q1)
@@ -102,6 +122,7 @@ def block_features(v1, ov, vf, tg, bid, win=6):
     L, T = v1.shape; vfc = np.asarray(vf, float)[:, None]; bid = np.asarray(bid)
     isob = np.isfinite(ov)
     r = np.where(isob, ov / vfc, 0.0); qd = np.where(isob, (ov <= 0.6 * vfc).astype(float), 0.0); o = isob.astype(float)
+    # Block-mate counts exclude the link itself (leave-own-link-out); links outside a block of 2+ get no mates.
     nb = np.zeros((L, T)); sq = np.zeros((L, T)); sr = np.zeros((L, T))
     for b in np.unique(bid[bid >= 0]):
         m = np.where(bid == b)[0]
@@ -111,6 +132,8 @@ def block_features(v1, ov, vf, tg, bid, win=6):
     with np.errstate(all='ignore'):
         fq = np.where(nb > 0, sq / np.maximum(nb, 1), np.nan); mr = np.where(nb > 0, sr / np.maximum(nb, 1), np.nan)
     st = np.where(np.isfinite(fq), (fq >= 0.5).astype(float), np.nan)
+    # Template search: the nearest own observed speed within +-win steps taken while the mates' state equalled
+    # the current one.
     lastv = np.full((L, T), np.nan); nextv = np.full((L, T), np.nan); lastd = np.full((L, T), np.nan); nextd = np.full((L, T), np.nan)
     for k in range(1, win + 1):
         for arr, dist, dt in ((lastv, lastd, -k), (nextv, nextd, k)):
@@ -120,6 +143,7 @@ def block_features(v1, ov, vf, tg, bid, win=6):
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         tm = np.nanmean(np.stack([lastv, nextv]), 0)
+        # Day templates: own median observed speed over the day while the mates were queued / free.
         dq_ = np.nanmedian(np.where(isob & (st == 1), ov, np.nan), axis=1); df_ = np.nanmedian(np.where(isob & (st == 0), ov, np.nan), axis=1)
     nq_ = (isob & (st == 1)).sum(1).astype(float); nf_ = (isob & (st == 0)).sum(1).astype(float)
     same = np.where(st == 1, dq_[:, None], np.where(st == 0, df_[:, None], np.nan))

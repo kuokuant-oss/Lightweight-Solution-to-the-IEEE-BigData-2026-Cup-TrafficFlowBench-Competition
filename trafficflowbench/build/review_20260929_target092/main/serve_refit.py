@@ -2,11 +2,27 @@
 Same feature assembly as build/review_20260924_ctm/serve/serve_ens.py; mix = .75 N + .25 A link probs, train-block mean >= .5;
 the guard window keeps the champion's cells. Parity gate: production models must reproduce the champion CSV exactly.
 Writes main/queue_override_ongoing_refitN6.parquet (only flipped cells). Never submits."""
+# Runs in pipeline/ongoing.sh ("serve_refit"), the decision step of the F2
+# operator. N6: six CTM ongoing boosters, 3 seeds each of two feature sets
+# ("selrec": state features + selection-screen replay + recency; "geomselrec":
+# the same plus queue geometry). The refit set is trained on January-February
+# 2031 (contract_audit/q4_refit). A: the location-free new-world ensemble
+# (ogens_<tag>_prob.parquet). Link probability = .75 x N + .25 x A; a cell is
+# queued when the mean over its link group (my_blocks) at the same time is
+# >= .5; a window with no queued cell takes its A-block decode (never-empty
+# rule). All serving inputs come from data up to each window's forecast time.
+# Outputs: queue_override_ongoing_refitN6.parquet (cells where the refit and
+# production decodes differ), never_empty_fallback.json, serve_refit.json and
+# ongoing_refitN6_d1.parquet (refit decision d1 on every official ongoing row,
+# read by make_r16b_bits.py).
 import os
 os.environ['OMP_NUM_THREADS'] = '2'
 import json, hashlib
 from pathlib import Path
 import numpy as np, pandas as pd, lightgbm as lgb
+# Original absolute roots; bin/tfb-run maps them onto the run tree.
+# PROD / NEW: production and refit N6 boosters. B / BID: link group id per
+# panel and link (my_blocks).
 ROOT = Path('/Volumes/Crucial X9/trafficflow/trafficflowbench'); CT = ROOT / 'build/review_20260924_ctm'
 HERE = Path(__file__).resolve().parent; RF = HERE.parent / 'contract_audit/q4_refit'
 REL = ROOT.parent / 'tfb_competition_data/kaggle_public'
@@ -18,9 +34,14 @@ B = np.load(CT / 'ruler/blocks/my_blocks.npy', allow_pickle=True).item(); BID = 
 
 
 def ens(models, s):
+    """Returns the mean probability of the boosters `models` on rows `s` (each reads its own feature columns)."""
     return np.mean([lgb.Booster(model_file=str(m)).predict(s[lgb.Booster(model_file=str(m)).feature_name()], num_threads=2) for m in models], 0)
 
 
+# Per split: official queue_ongoing rows of the CTM serving table, joined with
+# queue geometry, the selection-screen replay (prev_rej, n_rej) and the
+# same-split recency features. pN0 / pN1: production / refit N6 mean;
+# bp0 / bp1: link-group mean of .75 pN + .25 pA at each time.
 parts = []
 for sp, rt, tag in [('validation', 'realvali', 'realval'), ('private', 'realpriv', 'realpriv')]:
     s = pd.read_parquet(CT / f'serve/serve_real_{sp}.parquet'); s = s[s.condition.eq('queue_ongoing')].reset_index(drop=True)
@@ -40,6 +61,7 @@ for sp, rt, tag in [('validation', 'realvali', 'realval'), ('private', 'realpriv
         z['bp' + k] = z.groupby(['window_id', 'timestamp', 'bid'])['pl' + k].transform('mean')
     z['split'] = sp; parts.append(z)
 d = pd.concat(parts, ignore_index=True)
+# Attaches the official submission_id of every queue cell (submission_key.csv).
 d['timestamp'] = pd.to_datetime(d.timestamp, utc=True).dt.strftime('%Y-%m-%dT%H:%M:%SZ')
 key = pd.read_csv(REL / 'submission_key.csv', usecols=['submission_id', 'task', 'timestamp', 'link_id', 'window_id'], dtype=str)
 key = key[key.task == 'queue'].copy(); key['submission_id'] = key.submission_id.astype(int)

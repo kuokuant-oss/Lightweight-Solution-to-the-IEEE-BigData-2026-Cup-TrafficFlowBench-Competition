@@ -1,6 +1,12 @@
 """Champion (G1) non-hole Task 1 state values on validation, keyed by (panel, timestamp, link_id).
 G1 non-hole state rows == build/review_20260924_ctm/rl/rlb_state_rows.parquet (RLB-hybrid + k*), hole rows == g2v2F.
 Output: work/champ_val_state.parquet (panel, timestamp, link_id, speed_kmh, flow_vph, hole flag)."""
+# Task 1 reproduction pipeline, step 5 (`pipeline/task1.sh`, log `prep_key`).
+# build_ph.py --split validation reads the output to fill the history of the
+# validation pseudo holes. Terms: G1 is the parent submission at this stage;
+# RLB is the residual LightGBM model on the C1 fill; k* is the joint
+# speed/flow projection onto a blended density; G2v2 v2_F is the model of the
+# 90-minute holes. speed_kmh is in km/h, flow_vph in veh/h.
 import sys, numpy as np, pandas as pd
 from pathlib import Path
 ROOT = Path('/Volumes/Crucial X9/trafficflow/trafficflowbench'); sys.path.insert(0, str(ROOT))
@@ -12,6 +18,7 @@ for z in pd.read_csv(R.RELEASE / 'submission_key.csv', usecols=['submission_id',
     z = z[(z.task == 'state') & (z.split == 'validation')]
     parts.append(z[['submission_id', 'panel', 'timestamp', 'link_id']])
 k = pd.concat(parts, ignore_index=True); k['submission_id'] = k.submission_id.astype(np.int64)
+# Non-hole rows (RLB + k*) and hole rows (G2v2 v2_F), joined by submission_id.
 rl = pd.read_parquet(ROOT / 'build/review_20260924_ctm/rl/rlb_state_rows.parquet'); rl['hole'] = False
 g2 = pd.read_parquet(ROOT / 'build/review_20260925/task1/g2v2F_state_rows.parquet'); g2['hole'] = True
 ch = pd.concat([rl, g2], ignore_index=True)

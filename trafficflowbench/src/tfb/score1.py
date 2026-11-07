@@ -33,6 +33,7 @@ def lanes_by_key(panel: str) -> dict[str, float]:
 
 
 def lane_vector(station_id: pd.Series, link_id: pd.Series, lanes: dict[str, float]) -> np.ndarray:
+    """Returns the lane count per row: station_id lookup first, then link_id, else 1 (never below 1)."""
     v = station_id.astype(str).map(lanes)
     v = v.fillna(link_id.astype(str).map(lanes))
     return v.fillna(1.0).clip(lower=1.0).to_numpy(dtype=float)
@@ -64,15 +65,27 @@ class Accumulator:
     scorer does: regime -> panel -> family -> overall, every level a plain mean."""
 
     def __init__(self) -> None:
+        """Starts empty; `sq[(panel, regime)]` holds [speed SSE, flow-per-lane SSE, cell count]."""
         self.sq: dict[tuple[str, str], list[float]] = {}
 
     def add(self, panel: str, regime: str, d_speed: np.ndarray, d_flow_per_lane: np.ndarray) -> None:
+        """Adds one batch of errors to a (panel, regime) cell.
+
+        Args:
+            panel: panel ID.
+            regime: mask regime.
+            d_speed: prediction minus truth of speed (km/h), one value per
+                target cell.
+            d_flow_per_lane: prediction minus truth of flow divided by the
+                lane count (veh/h per lane), same cells.
+        """
         cell = self.sq.setdefault((panel, regime), [0.0, 0.0, 0])
         cell[0] += float(np.sum(d_speed * d_speed))
         cell[1] += float(np.sum(d_flow_per_lane * d_flow_per_lane))
         cell[2] += int(d_speed.size)
 
     def table(self) -> pd.DataFrame:
+        """Returns one row per (panel, regime): n, the two RMSEs and S_speed, S_flow, S_state (official formulas)."""
         rows = []
         for (panel, regime), (ss, sf, n) in sorted(self.sq.items()):
             if n == 0:
@@ -89,6 +102,7 @@ class Accumulator:
         return pd.DataFrame(rows)
 
     def overall(self) -> tuple[float, pd.DataFrame]:
+        """Returns (overall S_state, table()): regimes averaged per panel, panels per family, then families."""
         t = self.table()
         if t.empty:
             return 0.0, t

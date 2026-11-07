@@ -1,13 +1,21 @@
 """Explicit SSD relocation. Provenance files are never rewritten on read."""
+# Path map of the path layer (used by ssd_runtime.py). The original programs hold absolute paths
+# under the development machine's project roots; resolve_string() maps such a path onto the run
+# tree that holds this copy, and rebase_text() does the same inside source text.
 import json
 import os
 import re
 from pathlib import Path, PurePosixPath
 
+# REPO: this copy's trafficflowbench/ folder; WORKSPACE: the run tree root that replaces the old roots.
 REPO = Path(__file__).resolve().parents[1]
 WORKSPACE = REPO.parent
+# OLD_ROOTS: the project roots of the development machine, in the order they are tested.
 OLD_ROOTS = ('/Volumes/Crucial X9/trafficflow',
              '/Volumes/Crucial X9 1/trafficflow', '/Volumes/X9-2TB/trafficflow')
+# Optional map file: "renames" (old relative path -> new relative path of a renamed cache) and
+# "links" (folder prefix -> target, followed where symbolic links do not work). The package does not
+# ship environment/portable-files.json, so both maps are empty in a reproduction run.
 _INDEX = REPO / 'environment/portable-files.json'
 _data = json.loads(_INDEX.read_text(encoding='utf-8')) if _INDEX.is_file() else {}
 _renames = _data.get('renames', {})
@@ -17,6 +25,8 @@ _link_prefixes = sorted(_links, key=len, reverse=True)
 
 def safe_component(value):
     """Injective encoding for NEW artifact names (not IDs inside a dataset)."""
+    # Percent-encodes characters that Windows file names forbid, trailing spaces/dots and reserved
+    # device names, so distinct values give distinct file names.
     value = str(value)
     value = re.sub(r'[%<>:"/\\|?*\x00-\x1f]', lambda m: '%%%02X' % ord(m[0]), value)
     while value.endswith((' ', '.')):
@@ -27,6 +37,7 @@ def safe_component(value):
 
 
 def _link_prefix(tail):
+    """Returns the longest leading folder prefix of `tail` listed in the links map, or None."""
     parts = (tail or '').split('/')
     for count in range(len(parts), 0, -1):
         prefix = '/'.join(parts[:count])
@@ -36,6 +47,11 @@ def _link_prefix(tail):
 
 
 def _tail(raw):
+    """Returns the workspace-relative part of an absolute path under a known root, or None.
+
+    Known roots: the run tree root, the old roots, a `trafficflow` folder at a drive root
+    (Windows or /mnt/<drive>), and the tfb://repo/ and tfb://workspace/ names.
+    """
     raw = raw.replace('\\', '/')
     # Package edit (2026-11-07): test the run tree's own root first, so a run tree placed under
     # one of the old roots (e.g. /Volumes/X9-2TB/trafficflow/...) is not remapped onto itself.
@@ -56,6 +72,9 @@ def _tail(raw):
 
 def resolve_string(value, *, workspace=None, follow_links=None):
     """Map old absolute roots and cache names; bytes/FDs retain their types."""
+    # Paths outside the known roots are returned unchanged. Relative paths change only when they
+    # name a renamed or linked file. When TFB_RUNTIME_ENV is set, the development tree's
+    # trafficflowbench/.venv maps to that interpreter environment.
     if isinstance(value, int):
         return value
     if isinstance(value, bytes):
@@ -96,8 +115,22 @@ def resolve_string(value, *, workspace=None, follow_links=None):
 
 
 def rebase_text(value):
+    """Rewrites old project roots inside source text to the run tree root.
+
+    A single-line string that is a path under a drive-root `trafficflow` folder is mapped with
+    resolve_string(). Otherwise every occurrence of a root (followed by '/', whitespace, a quote
+    or the end) becomes the run tree root, and a single-line result that is then a path under a
+    known root is mapped with resolve_string(). A trailing slash is kept.
+
+    Args:
+        value: a string constant or source text of a project Python file.
+
+    Returns:
+        The rewritten text.
+    """
     # For frozen Python source literals and source fragments only. JSON unchanged.
     def literal_path(text):
+        """Maps a single path string, keeping its trailing slash."""
         result = resolve_string(text)
         if text.endswith(('/', '\\')) and not result.endswith(('/', '\\')):
             result += '/'
@@ -117,6 +150,7 @@ def rebase_text(value):
 
 def logical_name(value):
     """Recover an original filename when inspecting renamed historical caches."""
+    # Uses the renames map in reverse; other paths give their own file name.
     raw = Path(value).absolute().as_posix()
     tail = _tail(raw)
     reverse = {v: k for k, v in _renames.items()}

@@ -51,6 +51,13 @@ import pandas as pd
 
 from . import release as R, score2, task2build as TB
 
+# Role: the training programs of the shipped Task 2 models
+# (scripts/145_onset_prior_forward.py, scripts/strongest_20260922_ongoing.py)
+# fill their queue_prior column with build + apply; at serving,
+# task2infer.queue_prior computes the full-source rate over the model's prior
+# dates. Only train-split truth days are read.
+# MODE_*: labels written into PriorSpec. build always applies the fit-only
+# rule; MODE_LEGACY names the older rule in run records.
 MODE_FIT_LOO = "fit_loo"          # corrected: source = fit_dates only
 MODE_LEGACY = "legacy_fit_es"     # reproduces the pre-correction runs
 
@@ -58,11 +65,15 @@ MODE_LEGACY = "legacy_fit_es"     # reproduces the pre-correction runs
 @dataclass(frozen=True)
 class PriorSpec:
     """Everything needed to rebuild a prior, and to audit what it saw."""
+    # source_dates: YYYY-MM-DD train days whose labels may enter the prior.
+    # mode: label of the rule (see MODE_*). min_den: fewest eligible
+    # observations a (link, time-of-day) cell needs to use its own rate.
     source_dates: tuple[str, ...]
     mode: str = MODE_FIT_LOO
     min_den: int = TB.PRIOR_MIN_DEN
 
     def to_dict(self) -> dict:
+        """Returns the spec as a JSON-ready dict with the sorted dates."""
         s = sorted(self.source_dates)
         return {"mode": self.mode, "min_den": self.min_den, "n_source_dates": len(s),
                 "source_first": s[0] if s else None, "source_last": s[-1] if s else None,
@@ -90,6 +101,9 @@ def _day_counts(panel: str, dates: set[str]):
       * they are cached per (panel, date) across folds. Which days are IN the
         source set changes per fold; the counts for a given day do not.
     """
+    # Returns {date: (Q, E)} for the requested train days of `panel`: float32
+    # (link x stamp) arrays of queued and eligible flags, links in milepost
+    # order. Raises RuntimeError when none of `dates` has a truth file.
     cut = score2.v_cut(panel)
     from .task2pool import date_of
     while len(_COUNTS) >= CACHE_PANELS and panel not in _COUNTS:
@@ -116,6 +130,7 @@ def clear_cache() -> None:
 
 
 def _rate(num: np.ndarray, den: np.ndarray, min_den: int) -> np.ndarray:
+    """Returns num/den per cell, or the overall rate where den < min_den."""
     g = float(num.sum() / max(den.sum(), 1.0))     # global mean also excludes the held day
     return np.where(den >= min_den, num / np.maximum(den, 1.0), g)
 
@@ -129,6 +144,9 @@ class PanelPrior:
     rate for every panel only raised the peak. ``per_day`` remains available as
     a mapping for callers that want one explicitly.
     """
+    # full: rate over all source days. tot_q, tot_n: summed queued and
+    # eligible counts. counts: per-day (Q, E) arrays. _buf, _den: scratch
+    # buffers reused by loo().
     full: np.ndarray
     tot_q: np.ndarray
     tot_n: np.ndarray
@@ -162,6 +180,7 @@ class PanelPrior:
 
     @property
     def per_day(self) -> dict[str, np.ndarray]:
+        """Returns {date: leave-one-out rate} for every source day."""
         return {d: self.loo(d) for d in self.counts}
 
 
@@ -186,6 +205,9 @@ def apply(d: pd.DataFrame, priors: dict[str, PanelPrior]) -> np.ndarray:
     """Role-aware lookup. A row whose date is a source day gets that day's LOO
     rate; every other row -- ES, calibration, held-out, and serving -- gets the
     full-source rate, which contains none of its own labels."""
+    # `d` needs columns panel, date, _link_idx (row on the panel's
+    # milepost-ordered link axis) and _tod_idx (time-of-day slot, 0..287).
+    # Returns a float32 array aligned with the rows of `d`.
     out = np.empty(len(d), dtype=np.float32)
     li = d._link_idx.to_numpy()
     ti = d._tod_idx.to_numpy()

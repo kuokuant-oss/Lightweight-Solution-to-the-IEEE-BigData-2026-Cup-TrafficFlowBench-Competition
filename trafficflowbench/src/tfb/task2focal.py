@@ -34,6 +34,11 @@ from __future__ import annotations
 
 import numpy as np
 
+# Role: no program of the reproduction pipeline imports this module; it is the
+# record of the focal-loss training experiment.
+# ALPHA: weight of positive rows (negatives get 1 - ALPHA). GAMMA: focusing
+# exponent; larger values down-weight well-classified rows more. EPS keeps
+# probabilities away from 0 and 1 before the log.
 ALPHA, GAMMA = 0.25, 2.0        # Lin et al. arXiv:1708.02002; not swept
 EPS = 1e-9
 # The focal loss is not convex in the raw score for gamma > 0 -- about 13% of
@@ -46,6 +51,10 @@ HESS_FLOOR = 1e-6
 
 
 def _parts(z: np.ndarray, y: np.ndarray, alpha: float, gamma: float):
+    """Returns (s, a_t, q): label sign (+1/-1), class weight and clipped p_t.
+
+    ``gamma`` is accepted for a uniform signature and is not used here.
+    """
     s = 2.0 * y - 1.0                       # +1 for a positive, -1 for a negative
     a_t = np.where(y > 0, alpha, 1.0 - alpha)
     q = 1.0 / (1.0 + np.exp(-s * z))        # = p_t
@@ -55,6 +64,17 @@ def _parts(z: np.ndarray, y: np.ndarray, alpha: float, gamma: float):
 
 def grad_hess(z: np.ndarray, y: np.ndarray, alpha: float = ALPHA,
               gamma: float = GAMMA) -> tuple[np.ndarray, np.ndarray]:
+    """Returns the focal-loss gradient and hessian with respect to raw scores.
+
+    Args:
+        z: Raw scores (log-odds), one per row.
+        y: 0/1 labels.
+        alpha: Weight of positive rows.
+        gamma: Focusing exponent.
+
+    Returns:
+        (grad, hess), each shaped like ``z``; hess is floored at HESS_FLOOR.
+    """
     s, a_t, q = _parts(z, y, alpha, gamma)
     lg = np.log(q)
     om = 1.0 - q
@@ -68,6 +88,7 @@ def grad_hess(z: np.ndarray, y: np.ndarray, alpha: float = ALPHA,
 
 def loss(z: np.ndarray, y: np.ndarray, alpha: float = ALPHA,
          gamma: float = GAMMA) -> np.ndarray:
+    """Returns the per-row focal loss for raw scores ``z`` and 0/1 labels ``y``."""
     _, a_t, q = _parts(z, y, alpha, gamma)
     return -a_t * ((1.0 - q) ** gamma) * np.log(q)
 
@@ -79,7 +100,9 @@ def lgb_objective(alpha: float = ALPHA, gamma: float = GAMMA, weight=None):
     weights, so the 1/n_cells window weighting scripts/51 relies on has to be
     applied by hand or it silently disappears. scripts/77 verifies this.
     """
+    # `weight`, when given, replaces the Dataset weights.
     def fobj(preds, dataset):
+        """Returns weighted (grad, hess) for LightGBM's raw scores ``preds``."""
         y = dataset.get_label()
         g, h = grad_hess(preds, y, alpha, gamma)
         w = dataset.get_weight() if weight is None else weight
@@ -104,6 +127,7 @@ def logloss_objective():
     reproduces LightGBM's built-in ``binary`` objective to 0.000e+00.
     """
     def fobj(preds, dataset):
+        """Returns weighted logloss (grad, hess) for raw scores ``preds``."""
         g, h = grad_hess(preds, dataset.get_label(), 0.5, 0.0)
         w = dataset.get_weight()
         g, h = 2.0 * g, 2.0 * h
@@ -126,6 +150,7 @@ def logloss_eval(weighted: bool = True):
     weighted metric would not be the same metric in both arms.
     """
     def feval(preds, dataset):
+        """Returns (name, mean logloss, False); lower is better."""
         y = dataset.get_label()
         w = dataset.get_weight() if weighted else None
         p = np.clip(1.0 / (1.0 + np.exp(-preds)), EPS, 1.0 - EPS)
@@ -139,6 +164,7 @@ def lgb_eval(alpha: float = ALPHA, gamma: float = GAMMA):
     """feval for early stopping. A custom objective leaves preds as raw scores,
     so the built-in binary_logloss metric would be reading the wrong quantity."""
     def feval(preds, dataset):
+        """Returns ("focal_loss", mean focal loss, False); lower is better."""
         y = dataset.get_label()
         w = dataset.get_weight()
         l = loss(preds, y, alpha, gamma)

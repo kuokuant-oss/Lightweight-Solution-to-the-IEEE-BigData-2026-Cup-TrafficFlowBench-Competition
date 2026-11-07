@@ -52,13 +52,20 @@ import pandas as pd
 
 from . import grid, release as R, score2, task2build as TB, task2feat as TF
 
+# Role: task2feat.build_window_features uses a per-link wave speed only when
+# given `wave_w`; the reproduction pipeline does not pass it and uses the
+# constant task2feat.C_CONG_KMH, so this is a research block.
+# DT_H: one 5-minute step in hours.
 MIN_LINKS = 3               # fewest links that admit a slope plus a residual
 DT_H = TF.DT_H
 
 
 def fd_wave(panel: str, links: list[str]) -> np.ndarray:
     """w = qc / (kj - kc) from the triangular FD, the free prior of notes/16 I item 3."""
+    # Returns km/h per link in the order of `links`; NaN where the link table
+    # lacks a value.
     lo = grid.link_order(panel).set_index("link_id").reindex(links)
+    # num(c): column c of the link table as a float array.
     num = lambda c: pd.to_numeric(lo[c], errors="coerce").to_numpy(dtype=float)
     with np.errstate(divide="ignore", invalid="ignore"):
         w = num("capacity_vph") / (num("k_jam") - num("critical_density"))
@@ -67,6 +74,11 @@ def fd_wave(panel: str, links: list[str]) -> np.ndarray:
 
 def panel_wave(panel: str, source_dates: set[str]) -> tuple[np.ndarray, dict]:
     """Per-link congested wave speed in km/h, plus a diagnostic dict."""
+    # Reads train-split truth days in `source_dates` only. Fallback order per
+    # link: own median over at least PRIOR_MIN_DEN regions, panel median, FD
+    # wave speed, then |C_CONG_KMH|. The diagnostic dict holds region counts,
+    # the censored share and percentiles of the result.
+    # Raises RuntimeError when no source day matches.
     from scipy import ndimage
     cut = score2.v_cut(panel)
     from .task2pool import date_of
@@ -80,6 +92,8 @@ def panel_wave(panel: str, source_dates: set[str]) -> tuple[np.ndarray, dict]:
         if links is None:
             links, mp = lk, mpost
             per_link = [[] for _ in links]
+        # Congested regions: 4-connected components of the (link x stamp)
+        # queue mask Q.
         lab, n = ndimage.label(Q)
         n_regions += n
         for k in range(1, n + 1):
@@ -87,6 +101,8 @@ def panel_wave(panel: str, source_dates: set[str]) -> tuple[np.ndarray, dict]:
             u = np.unique(r)
             if len(u) < MIN_LINKS:
                 continue
+            # First queued time of each member link, in hours from the day's
+            # first stamp.
             first = np.array([c[r == i].min() for i in u], dtype=float) * DT_H
             x = mp[u]
             if np.ptp(x) <= 0:
@@ -123,6 +139,7 @@ def panel_wave(panel: str, source_dates: set[str]) -> tuple[np.ndarray, dict]:
 
 
 def waves_for(panels: list[str], source_dates: set[str]):
+    """Returns {panel: per-link wave speed (km/h)} and a diagnostics table."""
     w, diags = {}, []
     for p in panels:
         arr, d = panel_wave(p, source_dates)

@@ -4,6 +4,10 @@ new speed = clip(HMP50 speed + 0.5 * corr, 6, 120.75) where corr = frozen Januar
 holes; no-ramp control and wrong-day placebo both worse).  Inputs: served G2v2 gap rows (off_rows_<split>) and the
 split's released ramp_states (Task 1 is offline).  Flow unchanged.  Output: d1_official_updates.parquet keyed by
 submission_id with the champion's current speed for verification."""
+# Runs in pipeline/task1.sh step 9 ("d1_official"); d2_official_prp.py reads
+# its output to check the correction and to carry the champion columns.
+# "Champion": the HMP50 + DK50 + CAP candidate CSV, whose gap speeds equal the
+# HMP50 speeds rounded to 3 decimals.
 import os, sys, json, gc
 os.environ.setdefault('OMP_NUM_THREADS', '2')
 from pathlib import Path
@@ -11,6 +15,9 @@ import numpy as np, pandas as pd, lightgbm as lgb
 HERE = Path(__file__).resolve().parent; sys.path.insert(0, str(HERE))
 import ramp_feats as RF
 from b2_ramp_resid import SP, FLOOR, CAP
+# Original absolute root; bin/tfb-run maps it onto the run tree. HMP: HMP50
+# serving rows; CHAMP: the candidate CSV after the CAP step; LAM: strength of
+# the correction.
 ROOT = Path('/Volumes/Crucial X9/trafficflow/trafficflowbench')
 R3 = ROOT / 'build/review_20260925/round3/task1_trans_serving/work'
 HMP = ROOT / 'build/review_20260927_research/serving/official_state_updates.parquet'
@@ -20,6 +27,7 @@ LAM = 0.5
 
 
 def main():
+    """Writes the D1 keyed gap-speed updates and the champion check for both splits."""
     bst = lgb.Booster(model_file=str(HERE / 'b3_sp_M2_janfit.txt')); fc = bst.feature_name()
     hm = pd.read_parquet(HMP)
     parts = []; rep = {}
@@ -31,6 +39,7 @@ def main():
         d = d.reset_index(drop=True)
         d = RF.attach(d, split); d = RF.attach_near(d, split)
         d['corr'] = bst.predict(d[fc], num_threads=2)
+        # Joins the correction onto the HMP50 hole rows by panel, timestamp and link.
         keys = ['panel', 'timestamp', 'link_id']
         z = hm[hm.split == split].merge(d[keys + ['corr', 'step_i', 'origin', 'li', 'date']], on=keys, how='left', validate='one_to_one')
         assert z['corr'].notna().all(), (split, int(z['corr'].isna().sum()))

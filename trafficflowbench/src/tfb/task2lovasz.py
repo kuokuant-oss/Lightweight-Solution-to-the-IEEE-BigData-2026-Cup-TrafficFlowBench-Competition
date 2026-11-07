@@ -77,11 +77,17 @@ from __future__ import annotations
 
 import numpy as np
 
+# Role: no program of the reproduction pipeline imports this module; it is the
+# record of the Lovász-hinge training experiment. HESSIAN names the hessian
+# substitute that make_objective returns (|gradient|).
 HESSIAN = "abs_grad"      # see the module docstring; 1.0 was tried and stalled
 
 
 def lovasz_grad(gt_sorted: np.ndarray) -> np.ndarray:
     """Gradient of the Lovász extension of the Jaccard set function."""
+    # `gt_sorted`: 0/1 labels ordered by descending hinge error. Returns one
+    # weight per position: the increase of the Jaccard loss as each cell is
+    # added in that order.
     p = len(gt_sorted)
     gts = gt_sorted.sum()
     intersection = gts - np.cumsum(gt_sorted)
@@ -94,6 +100,8 @@ def lovasz_grad(gt_sorted: np.ndarray) -> np.ndarray:
 
 def window_loss_grad(z: np.ndarray, y: np.ndarray) -> tuple[float, np.ndarray]:
     """Lovász hinge loss and its gradient for one window."""
+    # z: raw scores of the window's cells; y: their 0/1 labels. Returns
+    # (loss, grad) with grad aligned with z.
     signs = 2.0 * y - 1.0
     errors = 1.0 - z * signs
     order = np.argsort(-errors, kind="mergesort")
@@ -114,6 +122,13 @@ def _bounds(groups: np.ndarray) -> list[tuple[int, int]]:
 
 
 def loss_and_grad(z: np.ndarray, y: np.ndarray, spans) -> tuple[float, np.ndarray]:
+    """Sums the Lovász hinge over windows and returns (total loss, gradient).
+
+    Args:
+        z: Raw scores of all rows.
+        y: 0/1 labels.
+        spans: [start, end) row ranges, one per window (from _bounds).
+    """
     total = 0.0
     grad = np.zeros_like(z, dtype=float)
     for a, b in spans:
@@ -129,6 +144,7 @@ def make_objective(groups: np.ndarray):
     spans = _bounds(groups)
 
     def fobj(preds, dataset):
+        """Returns (grad, |grad|); |grad| stands in for the hessian."""
         y = dataset.get_label()
         _, g = loss_and_grad(np.asarray(preds, dtype=float), y, spans)
         return g, np.abs(g)
@@ -140,6 +156,7 @@ def make_eval(groups: np.ndarray):
     spans = _bounds(groups)
 
     def feval(preds, dataset):
+        """Returns ("lovasz", mean hinge loss per window, False)."""
         y = dataset.get_label()
         total, _ = loss_and_grad(np.asarray(preds, dtype=float), y, spans)
         return "lovasz", total / max(len(spans), 1), False
@@ -148,12 +165,16 @@ def make_eval(groups: np.ndarray):
 
 def _prep(frame, feats):
     """Rows sorted so each window is contiguous, plus its group array."""
+    # The sort is stable, so rows keep their order inside a window; `feats` is
+    # accepted for a uniform signature.
     import pandas as pd
     f = frame.sort_values("window_id", kind="mergesort")
     groups = pd.factorize(f.window_id, sort=False)[0]
     return f, groups
 
 
+# LOGIT_EPS: the probability clip of task2oof.logit (1e-4). MARGIN_SCALE:
+# |logit(LOGIT_EPS)|, the largest log-odds magnitude that clip allows.
 LOGIT_EPS = 1e-4
 MARGIN_SCALE = float(np.log((1 - LOGIT_EPS) / LOGIT_EPS))   # 9.2103, |logit(eps)|
 
@@ -176,6 +197,7 @@ def scaled_init(prior: np.ndarray) -> np.ndarray:
 
 
 def OOF_logit(p):
+    """Returns task2oof.logit(p), the clipped log-odds used as init score."""
     from . import task2oof as OOF
     return OOF.logit(p)
 
@@ -204,7 +226,11 @@ def lgb_fitter(feval_factory=None, init: str = "logit"):
     already per-window normalised, and sum|grad| over a window is 1 whatever the
     window's size, which scripts/84 checks.
     """
+    # `init`: "logit" (default, logit(queue_prior)), "scaled" (scaled_init) or
+    # "none" (no init score). Returns fit(train, valid, feats) -> (booster,
+    # best iteration).
     def _init(frame):
+        """Returns the init score of ``frame`` for the chosen ``init`` mode."""
         if init == "none":
             return None
         if init == "scaled":
@@ -212,6 +238,14 @@ def lgb_fitter(feval_factory=None, init: str = "logit"):
         return OOF_logit(frame.queue_prior.to_numpy())
 
     def fit(train, valid, feats):
+        """Trains one LightGBM model with the Lovász-hinge objective.
+
+        Uses task2oof.PARAMS with the objective and metric replaced, early
+        stopping on ``valid`` and no sample weights.
+
+        Returns:
+            (booster, best iteration).
+        """
         import lightgbm as lgb
         from . import task2oof as OOF
         tr, gtr = _prep(train, feats)

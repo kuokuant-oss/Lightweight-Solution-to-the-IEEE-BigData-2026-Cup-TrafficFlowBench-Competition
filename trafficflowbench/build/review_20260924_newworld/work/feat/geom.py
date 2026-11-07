@@ -4,8 +4,14 @@ Convention (measured on all 8 Task 2 corridors): queues grow toward LOWER link
 index (lower milepost) from a head at the high-index end, so 'upstream' is the
 lower index everywhere, which is what the legacy features (sgn=+1) assume too.
 """
+# Used for the geometry members (V6*) of the location-free ongoing ensemble
+# (og_ens.py): build_geom.py runs geom_features on the 12-stamp history of each
+# window, and step_frame repeats the per-link values for the 6 horizon steps.
+# Words used below: a "block" is a run of queued links; its "tail" is its
+# lowest (most upstream) link and its "head" its highest (downstream) link.
 import numpy as np, pandas as pd
 
+# Number of 5-minute horizon steps (T+5 .. T+30 min).
 HOR = 6
 
 
@@ -22,8 +28,34 @@ def _blocks(q, gap=2):
 
 def geom_features(V, Qf, E, vcut, length_km):
     """V, Qf: (L, H) speed / flow history, NaN = unobserved. Returns (L, HOR) dict of arrays."""
+    # Each returned array holds one value per link (shape (L,)); step_frame
+    # adds the step axis. `E` is accepted but not used. vcut: queue speed
+    # threshold per link (km/h); length_km: link lengths in link order.
+    #
+    # Features, per link:
+    #   g_n_blocks: number of queued blocks at the last stamp (T-5 min).
+    #   g_link_age: consecutive stamps, up to the last one, the link is queued.
+    #   g_in_block: 1 inside a block queued at the last stamp, else 0.
+    # For a link upstream of a block (the nearest block wins):
+    #   g_gap_km, g_gap_links: distance from the link's downstream end to the
+    #     block tail.
+    #   g_tail_vel: tail speed from a line fit to the tail position over the
+    #     last 7 stamps (at least 3 known), km per 5 min, negative = growing
+    #     upstream.
+    #   g_rh_w: shock-wave speed (q_in - q_up) / (k_in - k_up) in km/h
+    #     (Rankine-Hugoniot), from the mean flow and speed of the last 3
+    #     stamps on up to 3 links above the tail (up) and from the tail (in).
+    #   g_eta_rh, g_eta_vel: 5-minute steps until the tail reaches the link,
+    #     from g_rh_w or from g_tail_vel.
+    #   g_block_len_km, g_block_links: block length; g_head_age: stamps in
+    #     which a block with this head existed; g_tail_age: queued age of the
+    #     tail link; g_q_up, g_q_in: mean flow above and inside the tail.
+    # For a link inside a block: the block values above, g_pos_in_block_km
+    # (tail to the link's downstream end) and g_clear_eta_rh (5-minute steps
+    # until a downstream-moving shock clears the link; 99 when it does not).
     L, H = V.shape
     Vi = pd.DataFrame(V).T.interpolate(limit_direction='both').T.to_numpy()  # along time
+    # Speeds are filled along time first; a link without any speed is free.
     q = np.nan_to_num(Vi, nan=np.inf) <= vcut[:, None]
     xs = np.concatenate([[0.0], np.cumsum(length_km)])  # x_start[l]=xs[l], x_end[l]=xs[l+1]
     # tail position per stamp for block containing / nearest the final heads
@@ -40,6 +72,7 @@ def geom_features(V, Qf, E, vcut, length_km):
         age[still] += 1
     feats['g_link_age'][:] = age
     feats['g_in_block'][:] = 0
+    # Mean flow and speed of the last 3 stamps (T-15 .. T-5 min).
     Qm = np.nanmean(Qf[:, -3:], axis=1); Vm = np.nanmean(Vi[:, -3:], axis=1)
     for (tail, head) in fin:
         # history of this block's tail: for each stamp, block whose head is within 3 links of this head
@@ -55,6 +88,8 @@ def geom_features(V, Qf, E, vcut, length_km):
             vel = np.polyfit(hh, xt, 1)[0]  # km per 5 min (negative = tail moving upstream)
         head_age = int(np.sum(~np.isnan(tails)))
         tail_age = age[tail]
+        # Upstream state: up to 3 links above the tail; queue state: up to 3
+        # links from the tail toward the head. Density k = q / v (veh/km).
         up = slice(max(0, tail - 3), tail); dn = slice(tail, min(head + 1, tail + 3))
         q_u = np.nanmean(Qm[up]) if tail > 0 else np.nan; v_u = np.nanmean(Vm[up]) if tail > 0 else np.nan
         q_c = np.nanmean(Qm[dn]); v_c = np.nanmean(Vm[dn])
@@ -67,6 +102,7 @@ def geom_features(V, Qf, E, vcut, length_km):
             if np.isnan(feats['g_gap_km'][l]) or gap_km < feats['g_gap_km'][l]:
                 feats['g_gap_km'][l] = gap_km; feats['g_gap_links'][l] = tail - l
                 feats['g_tail_vel'][l] = vel; feats['g_rh_w'][l] = w
+                # gap (km) / |w| (km/h) = hours; x 12 = 5-minute steps.
                 feats['g_eta_rh'][l] = gap_km / max(-w, 0.5) * 12 if np.isfinite(w) else np.nan
                 feats['g_eta_vel'][l] = gap_km / max(-vel, 0.01) if np.isfinite(vel) else np.nan
                 feats['g_block_len_km'][l] = blen; feats['g_block_links'][l] = head - tail + 1
@@ -82,6 +118,17 @@ def geom_features(V, Qf, E, vcut, length_km):
 
 
 def step_frame(links, feats):
+    """Repeats per-link geometry features for the 6 horizon steps.
+
+    Args:
+      links: link ids in the order of the feature arrays.
+      feats: dict of (L,) arrays from geom_features.
+
+    Returns:
+      Frame with one row per (step 1..6, link): the features, link_id, step,
+      and each ETA minus the step (g_eta_rh_m_step, g_eta_vel_m_step,
+      g_clear_m_step; negative = reached before that step).
+    """
     rows = []
     base = pd.DataFrame(feats); base['link_id'] = links
     for s in range(1, HOR + 1):

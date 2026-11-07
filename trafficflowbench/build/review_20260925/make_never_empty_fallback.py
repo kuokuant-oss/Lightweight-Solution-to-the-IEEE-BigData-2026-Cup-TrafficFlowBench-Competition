@@ -14,6 +14,7 @@ This file states the rule for every window instead, the same rule the R20 operat
        (window_id, timestamp, link_id, split, queue_pred) for every official ongoing row of both splits.
 serve_refit.py imports never_empty() and applies it to the F2 decode of every window. Inputs are <= T only.
 """
+# Runs in the reproduction as `pipeline/ongoing.sh` step `fallback`.
 import numpy as np, pandas as pd
 from pathlib import Path
 HERE = Path(__file__).resolve().parent
@@ -30,6 +31,13 @@ def never_empty(window_id, decision, fallback):
 
 
 def a_block_decode():
+    """Returns the A-block decode of every official ongoing row of both splits.
+
+    Returns:
+      Frame with window_id, timestamp, link_id, split and queue_pred (0/1):
+      1 when the mean A-ensemble probability of the link's block, within the
+      same window and timestamp, is at least 0.5.
+    """
     B = np.load(NW / 'blocks/my_blocks.npy', allow_pickle=True).item(); BID = {p: dict(zip(v['links'], v['bid'])) for p, v in B.items()}
     parts = []
     for tag, split in (('realval', 'validation'), ('realpriv', 'private')):
@@ -42,6 +50,8 @@ def a_block_decode():
 
 if __name__ == '__main__':
     out = a_block_decode()
+    # 87,000 rows: every official ongoing (window, link, timestamp) cell of
+    # validation and private.
     assert len(out) == 87000 and not out[['window_id', 'timestamp', 'link_id']].duplicated().any()
     OUT.parent.mkdir(exist_ok=True); assert not OUT.exists(), OUT
     out.to_parquet(OUT, index=False)

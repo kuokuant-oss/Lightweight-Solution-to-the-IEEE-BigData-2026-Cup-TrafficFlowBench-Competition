@@ -1,4 +1,9 @@
 """Site choice + extent: production links in chosen site, or a train template of the site's onset block."""
+#
+# Role: `templates` is imported by serve_official.py (reproduction pipeline, onset.sh step 2, through
+# pipeline/onset_c3.py), which pickles its result with the frozen u-models; the reproduction reads the pickled
+# templates, since the shipped train caches keep only `links`. The __main__ block is the March pseudo-val ruler
+# for the site choice (record).
 import sys, numpy as np, pandas as pd, warnings
 from pathlib import Path
 warnings.filterwarnings('ignore')
@@ -9,11 +14,21 @@ import score as S
 from pv_sites import SITES, site_of
 from oracle_site import rep, pred0, LI
 
+# Panels with more than one onset site that the site choice serves.
 MULTI = ['D12_I5_N', 'D12_I5_S', 'D7_I210_W', 'D7_I405_S']
 REL = Path('/Volumes/Crucial X9/trafficflow/tfb_competition_data/kaggle_public')
 
 
 def templates():
+    """Builds the queue-extent template of each site on the multi-site panels from train onset events.
+
+    For every train onset event (events_train.parquet: day index di, onset step tq, queued link range) at a
+    site, takes the queued state (speed at or below 60% of free-flow speed, eligible cells) of the links in the
+    site region +-3 links at the onset step.
+
+    Returns:
+        {(panel, site): {link_id: share of the site's train onsets with that link queued}}.
+    """
     ev = pd.read_parquet(HERE / 'events_train.parquet')
     tpl = {}
     for panel in MULTI:
@@ -34,6 +49,20 @@ def templates():
 
 
 def apply(pred, choice, tpl, mode, thr=0.5):
+    """Restricts onset predictions to the chosen sites and fills their extent from the templates.
+
+    Args:
+        pred: prediction rows (window_id, panel, link_id, condition, queue_pred, prob).
+        choice: window_id -> set of sites to keep (windows without a choice are unchanged).
+        tpl: templates from templates().
+        mode: 'prod_else_tpl' (production links inside the chosen sites, else template links), 'tpl'
+            (template links only) or 'union' (both).
+        thr: template share at or above which a link is predicted queued.
+
+    Returns:
+        Copy of pred with the onset windows' queue_pred replaced; a window left empty gets the most probable
+        link of its chosen sites.
+    """
     p = pred.copy(); on = p.condition.eq('queue_onset'); q = p[on].copy()
     q['site'] = [site_of(pa, LI[pa][l]) for pa, l in zip(q.panel, q.link_id)]
     out = []
@@ -58,6 +87,8 @@ def apply(pred, choice, tpl, mode, thr=0.5):
 
 
 if __name__ == '__main__':
+    # Compares the oracle site and the top site of three unconditional hazard variants (u_phys_ph, u_phys,
+    # u_r6) under each decoding mode, with a 300-draw date bootstrap of the onset IoU change.
     tpl = templates()
     u = pd.read_parquet(HERE / 'uncond_pv.parquet')
     ps = pd.read_parquet(HERE / 'pv_sites.parquet').set_index('window_id')

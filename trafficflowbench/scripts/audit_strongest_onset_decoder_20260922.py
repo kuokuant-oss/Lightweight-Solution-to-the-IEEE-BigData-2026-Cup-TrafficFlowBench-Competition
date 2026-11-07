@@ -1,4 +1,16 @@
 """Bounded decoder addendum; all selection uses the three development folds."""
+
+# Role: research audit, kept as a record; the reproduction pipeline does not
+# run it, but audit_strongest_onset_selected_20260922.py imports its decoders.
+# It keeps the head probabilities that audit_strongest_onset_20260922 saved for
+# the three development folds and compares four decoders (RULES):
+# reference63_ensemble50 (.5 * reference127 + .5 * capacity63 with its own
+# threshold); panel_shrink25 and panel_shrink50 (one threshold per panel, moved
+# 25 % or 50 % of the way in log-odds from the fold's global threshold toward
+# the panel's best threshold); and expected_jaccard (per window, the
+# probability-ranked prefix with the highest expected IoU). The frozen choice
+# is written to final_selection.json.
+
 from __future__ import annotations
 import itertools,importlib.util,json
 from datetime import datetime,timezone
@@ -10,6 +22,8 @@ ROOT=Path(__file__).resolve().parents[1]
 sp=importlib.util.spec_from_file_location('onset_explore',ROOT/'scripts/audit_strongest_onset_20260922.py')
 X=importlib.util.module_from_spec(sp);sp.loader.exec_module(X)
 Q=X.Q;M=X.M;TE=X.TE;OUT=X.OUT
+# 64-point Gauss-Legendre rule moved from [-1, 1] to [0, 1], for the integral
+# in expected_utilities().
 NODES,WEIGHTS=np.polynomial.legendre.leggauss(64)
 NODES=(NODES+1)/2;WEIGHTS=WEIGHTS/2
 RULES=['reference63_ensemble50','panel_shrink25','panel_shrink50','expected_jaccard']
@@ -22,6 +36,9 @@ def expected_utilities(p):
        t^(|S|-1) product_{j outside S}(1-p_j+p_j*t) dt.
     Select among every nonempty probability-ranked prefix, no size cap.
     """
+    # Uses 1/n = integral_0^1 t^(n-1) dt and E[t^Z] = product(1 - p_j + p_j*t)
+    # for the number Z of queued cells outside the prefix. Column k below is the
+    # prefix of the k + 1 most probable cells.
     p=np.asarray(p,float);order=np.argsort(-p,kind='stable');r=p[order]
     terms=np.log1p((NODES[:,None]-1)*r[None,:])
     suffix=np.cumsum(terms[:,::-1],axis=1)[:,::-1]
@@ -33,6 +50,13 @@ def expected_utilities(p):
 
 
 def expected_decode(d,p,temperature,odds):
+    """Decodes each window as its probability-ranked prefix with the highest expected IoU.
+
+    Probabilities are first rescaled as expit(logit(p) / temperature + log(odds)).
+
+    Returns:
+        Boolean decision per row of `d`.
+    """
     posterior=expit(logit(np.clip(p,1e-10,1-1e-10))/temperature+np.log(odds))
     pred=np.zeros(len(d),bool)
     for ix in d.groupby('window_id',sort=False).indices.values():
@@ -42,6 +66,14 @@ def expected_decode(d,p,temperature,odds):
 
 
 def verify_formula():
+    """Checks expected_utilities() against brute-force enumeration on 24 random 6-cell windows.
+
+    The assertions fail when the formula error exceeds 1e-12 or when some
+    nonempty subset beats the best ranked prefix.
+
+    Returns:
+        Summary dict for the audit record.
+    """
     rng=np.random.default_rng(20260922);worst=0.
     for _ in range(24):
         p=rng.uniform(.01,.99,6);order,u=expected_utilities(p)
@@ -66,6 +98,15 @@ def verify_formula():
 
 
 def panel_calibration(ca,p,global_t,alpha):
+    """Chooses a shrunk decision threshold per panel on calibration rows.
+
+    For each panel the best GRID threshold is found (ties go to the one
+    closest to `global_t`) and then moved from `global_t` toward it in
+    log-odds: expit((1 - alpha) * logit(global_t) + alpha * logit(local)).
+
+    Returns:
+        (panel -> threshold, panel -> details).
+    """
     thresholds={};details={}
     for panel,ix in ca.groupby('panel',sort=False).indices.items():
         g=ca.iloc[ix].reset_index(drop=True);gp=p[ix];rows=[]
@@ -80,6 +121,7 @@ def panel_calibration(ca,p,global_t,alpha):
 
 
 def panel_decode(d,p,thresholds):
+    """Decodes each panel's rows with that panel's threshold (audit_holdout20_queue.decode)."""
     result=np.zeros(len(d),bool)
     for panel,ix in d.groupby('panel',sort=False).indices.items():
         result[ix]=Q.decode(d.iloc[ix].reset_index(drop=True),p[ix],{'queue_onset':thresholds[panel]})
@@ -87,6 +129,20 @@ def panel_decode(d,p,thresholds):
 
 
 def calibrate_decoder(rule,ca,cp,global_t):
+    """Fits a decoder's settings on calibration probabilities.
+
+    Args:
+        rule: 'panel_shrink25', 'panel_shrink50' or 'expected_jaccard'.
+        ca: calibration rows.
+        cp: calibration probabilities.
+        global_t: the fold's global threshold (reference127).
+
+    Returns:
+        Descriptor dict for decode().
+
+    Raises:
+        ValueError: unknown rule.
+    """
     if rule.startswith('panel_shrink'):
         alpha=.25 if rule=='panel_shrink25' else .5
         thresholds,details=panel_calibration(ca,cp,global_t,alpha)
@@ -104,12 +160,18 @@ def calibrate_decoder(rule,ca,cp,global_t):
 
 
 def decode(rule,d,p,desc):
+    """Applies a calibrated decoder descriptor to rows `d`; any other rule uses its single threshold."""
     if rule.startswith('panel_shrink'):return panel_decode(d,p,desc['thresholds'])
     if rule=='expected_jaccard':return expected_decode(d,p,desc['selected']['temperature'],desc['selected']['odds_multiplier'])
     return Q.decode(d,p,{'queue_onset':desc['threshold']})
 
 
 def main():
+    """Scores the four decoders on the three folds and freezes the final selection over all recipes and decoders.
+
+    Raises:
+        SystemExit: decoder_addendum.json already exists.
+    """
     dest=OUT/'decoder_development';dest.mkdir(parents=True,exist_ok=True)
     protocol={'created_at_utc':datetime.now(timezone.utc).isoformat(),'script_sha256':Q.sha(__file__),
       'recipes':RULES,'folds':X.FOLDS,'reference_base':'reference127, same frozen clean development predictions',
@@ -124,8 +186,10 @@ def main():
     if (OUT/'decoder_addendum.json').exists():raise SystemExit('Refusing to overwrite decoder addendum')
     X.dump(OUT/'decoder_addendum.json',protocol)
     X.dump(dest/'formula_enumeration_test.json',verify_formula())
+    # Step 1-5 labels for fullsix().
     old=pd.read_parquet(X.HOLD/'champion_queue_onset_development_features.parquet');early=X.early_truth(old)
     results=[]
+    # Decoders reuse the fold probabilities saved by `explore`; no model is refit.
     for fold,*_ in X.FOLDS:
         src=OUT/'development'/fold
         ca=pd.read_parquet(src/'reference127_calibration.parquet')
@@ -147,6 +211,8 @@ def main():
                'calibration':desc,'panel_scores':f.groupby('panel').IoU.mean().to_dict()}
             results.append(r);print('DECODER',fold,rule,r['S_onset'],flush=True)
             X.dump(dest/'results.json',results)
+    # Same gate as `explore` over the original recipes and the new decoders;
+    # within .001 of the best, the first in `order` wins.
     original=json.loads((OUT/'development_results.json').read_text())
     table=pd.DataFrame([{'fold':r['fold'],'recipe':r['recipe'],'S_onset':r['S_onset']} for r in original+results])
     pivot=table.pivot(index='fold',columns='recipe',values='S_onset').loc[['oct','nov','dec']]

@@ -1,4 +1,7 @@
 """Upper bound: restrict production onset predictions to the TRUE site(s); also to a chosen site from a rule."""
+#
+# Role: ruler analysis (record). In the reproduction pipeline it is only imported, through
+# serve_official.py -> eval_template.py (onset.sh step 2); restrict() and rep() are not called there.
 import sys, numpy as np, pandas as pd
 from pathlib import Path
 HERE = Path(__file__).resolve().parent
@@ -16,6 +19,9 @@ LI = {}
 
 def restrict(pred, choice, extra_top=True):
     """choice: window_id -> set of sites to keep (None = keep as is)."""
+    # pred: prediction rows (window_id, panel, link_id, condition, queue_pred, prob). On onset windows with a
+    # choice, predictions outside the kept sites are dropped; with extra_top, a window left empty gets the most
+    # probable link of its kept sites. Other windows are unchanged.
     p = pred.copy()
     on = p.condition.eq('queue_onset')
     q = p[on].copy()
@@ -34,6 +40,7 @@ def restrict(pred, choice, extra_top=True):
 
 
 def rep(pred, name):
+    """Scores pred on the pseudo-val windows, prints the onset IoU (windows with an observed queue) and returns them."""
     fr = S.score(pred, 'validation')
     fo = fr[fr.condition.eq('queue_onset') & (fr.n_true > 0)]
     a = S.agg(fo); b = S.agg(fo, 'iou_clean')
@@ -42,6 +49,7 @@ def rep(pred, name):
 
 
 if __name__ == '__main__':
+    # Upper bounds: production prediction restricted to the true site(s), on all and on the multi-site panels.
     rep(pred0, 'production')
     ora = {wid: set(r.ysite.split('+')) - {'X'} or None for wid, r in ps.iterrows() if isinstance(r.ysite, str) and r.ysite}
     rep(restrict(pred0, ora), 'oracle true site(s)')

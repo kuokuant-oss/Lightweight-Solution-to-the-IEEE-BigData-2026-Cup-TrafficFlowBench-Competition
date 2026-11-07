@@ -17,10 +17,12 @@ import argparse, hashlib, sys
 from pathlib import Path
 import numpy as np, pandas as pd
 
+# Column order of the official submission file.
 HEADER = "submission_id,task,speed_kmh,flow_vph,queue_pred,path_flow\n"
 
 
 def sha256(p):
+    """Returns the SHA256 hex digest of file `p`, read in 4 MiB chunks."""
     h = hashlib.sha256()
     with open(p, "rb") as f:
         for b in iter(lambda: f.read(1 << 22), b""):
@@ -29,6 +31,14 @@ def sha256(p):
 
 
 def main():
+    """Writes the submission CSV from the per-row sources and checks its SHA256.
+
+    Run as a script; the arguments are described in the module docstring. Exits with
+    status 1 when --expect-sha is given and the written file has a different SHA256.
+
+    Raises:
+        ValueError: submission_key.csv has a task other than state, queue or odme.
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True)
     ap.add_argument("--out", required=True)
@@ -41,12 +51,15 @@ def main():
     out = Path(a.out)
     if out.exists():
         sys.exit(f"refusing to overwrite {out}")
+    # Rows come in submission_key order. Values are kept in arrays indexed by submission_id;
+    # the np.searchsorted task lookups below assume the key lists ids in ascending order.
     key = pd.read_csv(Path(a.data) / "submission_key.csv", usecols=["submission_id", "task"])
     sid = key.submission_id.to_numpy(np.int64)
     task = key.task.to_numpy()
     n = int(sid.max()) + 1
     assert len(np.unique(sid)) == len(sid)
 
+    # State: speed (km/h) and flow (veh/h), rounded to 3 decimals; later files override earlier ones.
     v = np.full(n, np.nan); q = np.full(n, np.nan)
     for p in a.state:
         d = pd.read_parquet(p, columns=["submission_id", "speed_kmh", "flow_vph"])
@@ -58,6 +71,7 @@ def main():
     miss = int((~np.isfinite(v[st]) | ~np.isfinite(q[st])).sum())
     assert miss == 0, f"{miss} state rows not covered by the state sources"
 
+    # Queue: 0/1 per row; onset and ongoing files cover disjoint rows, unlisted rows stay 0.
     qp = np.zeros(n, np.int8); seen = np.zeros(n, bool)
     for p in (a.onset, a.ongoing):
         d = pd.read_parquet(p, columns=["submission_id", "queue_pred"])
@@ -68,6 +82,7 @@ def main():
         assert set(np.unique(vals)) <= {0, 1}
         qp[ii] = vals; seen[ii] = True
 
+    # OD: path flows rounded to 4 decimals; every odme row must be covered.
     pf = np.full(n, np.nan)
     d = pd.read_parquet(a.odme, columns=["submission_id", "path_flow"])
     ii = d.submission_id.to_numpy(np.int64)
@@ -75,6 +90,7 @@ def main():
     od = sid[task == "odme"]
     assert np.isfinite(pf[od]).all(), "odme rows not covered"
 
+    # Mode "x" creates the file and fails if it already exists.
     with open(out, "x") as f:
         f.write(HEADER)
         for s, t in zip(sid.tolist(), task.tolist()):

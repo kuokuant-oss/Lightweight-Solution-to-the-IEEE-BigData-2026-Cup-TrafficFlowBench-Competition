@@ -20,8 +20,11 @@
 #   6. assemble <out>/submission.csv in submission_key order and print its SHA256
 set -eu
 PKG=$(cd "$(dirname "$0")" && pwd -P)
+# Lines 2-22 of this file are the --help text; keep new lines below this point.
+# EXPECT: SHA256 of the selected submission file (the value step 6 compares with).
 EXPECT=cf5869e23d8bf063d37e6636355f66b8385be1ee7e7257a9943a16783ac00fc5
 DATA=""; OUT=""; PY=$(command -v python3 || true); CHECK=1
+# Parse the command-line options.
 while [ $# -gt 0 ]; do
   case "$1" in
     --data) DATA=$2; shift 2 ;;
@@ -32,9 +35,12 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+# Both folders are required, and the interpreter must exist and be executable.
 [ -n "$DATA" ] && [ -n "$OUT" ] || { echo "usage: run_reproduce.sh --data <kaggle_public> --out <dir> [--python <py>] [--no-check]" >&2; exit 2; }
 [ -n "$PY" ] && [ -x "$PY" ] || { echo "no Python interpreter; pass --python" >&2; exit 2; }
+# Absolute interpreter path, so the segment scripts run the same Python from any folder.
 PY=$(cd "$(dirname "$PY")" && pwd -P)/$(basename "$PY")
+# Check Python 3.12 and the exact package versions of requirements.txt before any work.
 "$PY" - <<'EOF' || exit 2
 import sys
 if sys.version_info[:2] != (3, 12):
@@ -53,12 +59,20 @@ for p, v in want.items():
 if bad:
     sys.exit("install requirements.txt first: " + "; ".join(bad))
 EOF
+# Resolve --out and --data to physical absolute paths; the run tree is <out>/run.
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd -P); DATA=$(cd "$DATA" && pwd -P)
 RUN="$OUT/run"
+# Never reuse an earlier run tree or overwrite an earlier submission.
 [ ! -e "$RUN" ] || { echo "refusing to reuse $RUN; give a new --out" >&2; exit 2; }
 [ ! -e "$OUT/submission.csv" ] || { echo "refusing to overwrite $OUT/submission.csv" >&2; exit 2; }
+# The segment scripts and bin/tfb-run read the interpreter from TFB_PYTHON.
 export TFB_PYTHON="$PY"
 T0=$(date +%s)
+# Prints one progress line prefixed with the wall-clock time.
+# Arguments:
+#   Words of the message.
+# Outputs:
+#   Writes "[HH:MM:SS] <message>" to stdout.
 stamp() { echo "[$(date +%H:%M:%S)] $*"; }
 
 stamp "1/6 staging run tree"
@@ -69,6 +83,8 @@ stamp "3/6 Task 2 onset";    sh "$PKG/pipeline/onset.sh" "$RUN"
 stamp "4/6 Task 2 ongoing";  sh "$PKG/pipeline/ongoing.sh" "$RUN"
 stamp "5/6 Task 4 OD";       sh "$PKG/pipeline/od.sh" "$RUN"
 stamp "6/6 assembling submission.csv"
+# The final per-row sources written by the segments. assemble.py applies the six state files in
+# this order (a later file overrides an earlier one on the ids it lists) and checks the SHA256.
 S="$RUN/final_sources"
 set -- --data "$DATA" --out "$OUT/submission.csv" \
   --state "$S/state_1_g2v2.parquet" --state "$S/state_2_dk50.parquet" --state "$S/state_3_cap.parquet" \

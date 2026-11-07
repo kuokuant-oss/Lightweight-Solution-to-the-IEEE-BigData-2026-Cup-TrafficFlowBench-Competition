@@ -4,6 +4,11 @@ replaced by v2F_v / v2F_ql*lanes, recompute the eval_v2.py accumulators (sse_v_i
 assert they reproduce res/*_v2_cmp_days.csv (cand v2F); then replace the hole speeds by the corrected speeds
 (verify/work/v5_inworld_preds.npz: serve / strict), flow unchanged, and recompute.  S_state / S_phys via eval_v2.summarize.
 -> verify/results/v6_phys.json"""
+# Research record: main() needs February in-world tables (c0_cache, res/,
+# inworld_apply_rows, v5_inworld_preds) that are not shipped. The
+# reproduction imports this file through review_20260927/density_holes.py
+# (for acc, summarize and physics) when the HM25 hole-mixture step loads
+# iteration2/hole_mixture.py.
 import os, sys, json
 os.environ['OMP_NUM_THREADS'] = '3'
 sys.dont_write_bytecode = True
@@ -15,10 +20,38 @@ G2V2 = ROOT / 'build/review_20260924_ctm/g2v2'; sys.path.insert(0, str(G2V2)); s
 from src.tfb import physics
 from eval_v2 import summarize
 PANELS = ['D7_I10_E', 'D7_I10_W', 'D7_I210_E', 'D7_I210_W', 'D7_I405_N', 'D7_I405_S', 'D12_I5_N', 'D12_I5_S']
+# Hole length in 5-minute slots (90 min).
 LG = 18
 
 
 def acc(v, q, z, k, L, lanesc, vf, capl, kcl, kjl, keep):
+    """Accumulates the state and physics score terms of one day.
+
+    Args:
+      v: (L, T) speed of the candidate state, km/h.
+      q: (L, T) flow of the candidate state, veh/h.
+      z: day cache with arrays '<k>_<name>': truth TV and TQ, released V and
+        Q, eligibility E, lanes ln, and the masks rt, gm and rv.
+      k: day key, 'd<day index>'.
+      L: (L, 1) link lengths, km.
+      lanesc: (L, 1) lanes.
+      vf: (L, 1) free-flow speed, km/h.
+      capl: (L, 1) capacity per lane, veh/h.
+      kcl: (L, 1) critical density per lane, veh/km.
+      kjl: (L, 1) jam density per lane, veh/km.
+      keep: (L,) links that are scored.
+
+    Returns:
+      Dict of sums. n, sse_v, sse_q (flow per lane) over the target cells
+      (rt with truth) where gm holds ('in') and where it does not ('out').
+      For frames A and B: num/den, the absolute error of the change of the
+      vehicle count N = q / v x L between consecutive slots against the
+      truth change, and the truth total (LWR conservation); fdn/fdd, the
+      absolute gap between per-lane flow and the triangular fundamental
+      diagram flow at the same density, and the per-lane flow total. Frame A
+      uses every eligible cell with truth on scored links; frame B only those
+      that are targets or observed.
+    """
     ln = np.maximum(z[f'{k}_ln'].astype(float), 1.0)[:, None] * np.ones_like(v)
     tvf, tqf = z[f'{k}_TV'].astype(float), z[f'{k}_TQ'].astype(float); E = z[f'{k}_E']; V, Q = z[f'{k}_V'], z[f'{k}_Q']
     rt = z[f'{k}_rt']; gm = z[f'{k}_gm']; rv = z[f'{k}_rv']
@@ -42,6 +75,7 @@ def acc(v, q, z, k, L, lanesc, vf, capl, kcl, kjl, keep):
 
 
 def main():
+    """Scores the parent and the corrected hole speeds on February and writes v6_phys.json."""
     A = pd.read_parquet(LENS / 'work' / 'inworld_apply_rows.parquet', columns=['panel', 'date', 'origin', 'li', 'step_i', 'ch_v'])
     P = np.load(HERE / 'work' / 'v5_inworld_preds.npz'); A['serve'] = P['serve']; A['strict'] = P['strict']
     out = {}; allrows = []

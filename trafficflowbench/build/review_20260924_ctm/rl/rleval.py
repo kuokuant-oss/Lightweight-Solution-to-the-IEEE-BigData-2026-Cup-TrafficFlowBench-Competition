@@ -3,18 +3,24 @@ month; adds the two D12_I405 panels as a fifth family for the supplementary 10-p
 Official-form S_state (per panel x regime RMSE over ALL targets incl. holes), local LWR proxy (rhs == dN_true) in
 frame A (all eligible) and frame B (masked-layer cells + targets), official-form S_FD over the frame-B rows.
 Candidates override C1 at NON-hole targets only, via arrays aligned with the feature-table rows."""
+#
+# Role: evaluation library for rl_eval.py (record of how RL / RLB were selected); the reproduction pipeline does
+# not use it. Reads cache/<panel>_<month>.npz and cache/<panel>_<month>_meta.json (per-day truth, C1 fields,
+# masks and link parameters prepared for the train months).
 import json, numpy as np, pandas as pd
 from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SP = HERE / 'cache'
 PANELS = ['D7_I10_E', 'D7_I10_W', 'D7_I210_E', 'D7_I210_W', 'D7_I405_N', 'D7_I405_S', 'D12_I5_N', 'D12_I5_S']
 PANELS10 = PANELS + ['D12_I405_N', 'D12_I405_S']
+# FAM: family per panel (both directions of a freeway); the D12_I405 pair forms a fifth family.
 FAM = {'D7_I10_E': 'I10', 'D7_I10_W': 'I10', 'D7_I210_E': 'I210', 'D7_I210_W': 'I210', 'D7_I405_N': 'I405', 'D7_I405_S': 'I405',
        'D12_I5_N': 'I5', 'D12_I5_S': 'I5', 'D12_I405_N': 'D12_I405', 'D12_I405_S': 'D12_I405'}
 _cache = {}
 
 
 def load(panel, month):
+    """Returns (npz arrays, meta dict) of one panel and month; keeps only the last one in memory."""
     key = (panel, month)
     if key not in _cache:
         _cache.clear(); _cache[key] = (np.load(SP / f'{panel}_{month}.npz'), json.load(open(SP / f'{panel}_{month}_meta.json')))
@@ -23,6 +29,11 @@ def load(panel, month):
 
 def evaluate(panel, month, days, cands, rows):
     """cands: {name: (v array, q_per_lane array) | (None, None)} aligned with rows (DataFrame with day, li, ci; index 0..n-1)."""
+    # Per day: ok = truth available, rt = scored target cells, gm = cells inside the Task 2 gap, rv = valid
+    # pairs of consecutive steps for the LWR proxy. Flow errors are per lane. N = density x link length is the
+    # number of vehicles on a link; the LWR proxy compares its change between steps with the true change.
+    # The FD score compares per-lane flow with a triangular fundamental diagram (free-flow speed, critical
+    # density, jam density, capacity).
     z, meta = load(panel, month)
     ln = np.maximum(z['ln'], 1.0)[:, None]; L = z['par_length_km'][:, None]; keep = z['keep']
     lanes = np.maximum(z['par_lanes'], 1.0)[:, None]; vf = z['par_free_speed_kmh'][:, None]
@@ -58,6 +69,19 @@ def evaluate(panel, month, days, cands, rows):
 
 
 def summarize(acc, panels=None):
+    """Aggregates evaluator rows into scores.
+
+    S_state = 0.54 * (1 - speed RMSE / 25) + 0.46 * (1 - per-lane flow RMSE / 600) per panel x regime;
+    S_LWR_A / S_LWR_B = 1 - LWR proxy error ratio in frame A / B; S_FD = 1 - FD error ratio;
+    S_phys = (S_FD + 2 * S_LWR) / 3.
+
+    Args:
+        acc: list of dicts from evaluate() with a 'panel' key.
+        panels: optional panel subset.
+
+    Returns:
+        (panel x candidate x regime table, panel x candidate table, candidate table of the family means).
+    """
     d = pd.DataFrame(acc)
     if panels is not None: d = d[d.panel.isin(panels)]
     g = d.groupby(['panel', 'cand', 'regime']).sum(numeric_only=True).reset_index()
@@ -71,6 +95,11 @@ def summarize(acc, panels=None):
 
 
 def lb_delta(f, base, cand, tr=(0.73, 0.86)):
+    """Returns the score differences of cand over base and the projected leaderboard change.
+
+    dLB = 0.35 * dS_state + 0.15 * dS_phys_B * tr, with tr the (low, high) share of the frame-B physics gain
+    assumed to reach the leaderboard.
+    """
     ds = f.loc[cand, 'S_state'] - f.loc[base, 'S_state']
     dpB = f.loc[cand, 'S_phys_B'] - f.loc[base, 'S_phys_B']; dpA = f.loc[cand, 'S_phys_A'] - f.loc[base, 'S_phys_A']
     return dict(dS_state=ds, dS_physB=dpB, dS_physA=dpA, dLB_lo=0.35 * ds + 0.15 * dpB * tr[0], dLB_hi=0.35 * ds + 0.15 * dpB * tr[1])

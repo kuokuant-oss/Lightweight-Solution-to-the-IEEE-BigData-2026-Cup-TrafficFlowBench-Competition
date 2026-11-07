@@ -1,8 +1,13 @@
 """Leave-own-day-out split statistics per (link, slot) from the released observed layer of one split.
 All arrays are computed from the masked/observed layer only (what serving has); official Task 2 holes are NaN there.
 Temporal smoothing: box of +-HW slots on the per-day sums before the leave-one-day-out subtraction."""
+# Used by the month-specific hole-speed correction (T1): build_ph.py and
+# round3/task1_trans_serving/s3_build_rows.py compute these statistics on each
+# split, and the strict checks recompute them on one day-parity half. Arrays
+# are (days D, links L, five-minute slots T).
 import numpy as np
 
+# Half-width of the time box: +-2 slots (+-10 min).
 HW = 2
 
 
@@ -14,8 +19,20 @@ def _box(x, hw=HW):
 
 
 class SplitStats:
+    """Per-split link x slot statistics with a leave-one-day-out view.
+
+    A cell is observed when speed and flow are finite and the cell is
+    score-eligible; it is queued when its speed is at most vcut. Every per-day
+    sum is box-summed over +-HW slots, so loo(d) subtracts day d from the
+    split totals.
+    """
     def __init__(self, V, Q, E, vcut, lanes, bid):
         """V, Q: (D, L, T) observed speed / flow (NaN = unseen); E: eligibility; vcut, lanes: (L,); bid: block id (L,)."""
+        # Per-day box sums (D, L, T): cnt observed cells, sv speed, sq flow
+        # per lane, nq queued cells, svq speed of queued cells. tq_s, tq_n:
+        # whole-day queued-speed sum and count per link (D, L). M: block
+        # membership matrix (blocks x links); bi: block index of each link
+        # (-1 = none). T: split totals of the box sums.
         ob = np.isfinite(V) & np.isfinite(Q) & E
         v = np.where(ob, V, 0.0); ql = np.where(ob, Q / lanes[None, :, None], 0.0)
         qd = ob & (V <= vcut[None, :, None])
@@ -33,6 +50,12 @@ class SplitStats:
 
     def loo(self, d):
         """Dict of (L, T) leave-day-d-out statistics."""
+        # s_v: mean speed (km/h); s_ql: mean flow per lane (veh/h); s_qf:
+        # queued share; s_n: observed share of the box cells on the other
+        # days; s_vq: mean speed when queued; s_tq: whole-day queued-speed mean
+        # of the link (needs >= 20 queued cells); s_bqf: queued share of the
+        # link's block. Cells without any observation on the other days are
+        # NaN, except s_n.
         c = self.T['cnt'] - self.cnt[d]
         with np.errstate(all='ignore'):
             o = dict(s_v=(self.T['sv'] - self.sv[d]) / c, s_ql=(self.T['sq'] - self.sq[d]) / c,

@@ -3,8 +3,23 @@
 Never selects a recipe using the 55 held dates. Native candidate and champion
 holdout predictions already exist; they are comparison controls, not features.
 """
+
+# Role: research audit of the 0922 onset head, kept as a record; the
+# reproduction pipeline does not run it. `explore` refits the scripts/145 onset
+# head under six recipes (RULES) on three forward development folds (FOLDS)
+# and freezes one recipe by a predeclared rule (selection.json). `holdout`
+# then refits that recipe once and scores it on the 55 holdout days against
+# the champion and the existing candidate.
+# Recipes: reference127 (the scripts/145 head, 127 leaves), capacity31 and
+# capacity63 (31 or 63 leaves), no_unconditional_prior (drops queue_prior),
+# no_absolute_clock (drops the time-of-day columns in CLOCK) and
+# legacy_blend25 (.75 * reference127 + .25 * legacy50, the older 50-feature
+# head with the prior as offset).
+# Usage: audit_strongest_onset_20260922.py {explore|holdout}
+
 from __future__ import annotations
 import os
+# Pin the BLAS / OpenMP thread pools to 3 before numpy and LightGBM load.
 for k in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','VECLIB_MAXIMUM_THREADS'):
     os.environ[k]='3'
 import argparse,gc,hashlib,importlib.util,json,sys,time
@@ -17,9 +32,13 @@ from threadpoolctl import threadpool_limits
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
+# Q: audit_holdout20_queue (decode, frame, calibrate, apply_prior, sha);
+# M: scripts/145 (Hazard, identity, predictions, PARAMS, GRID).
 sp=importlib.util.spec_from_file_location('holdqueue',ROOT/'scripts/audit_holdout20_queue.py')
 Q=importlib.util.module_from_spec(sp);sp.loader.exec_module(Q)
 M=Q.M;OOF=Q.OOF;PR=Q.PR;TE=Q.TE
+# HOLD: the holdout-audit queue folder (cached features and predictions).
+# SOURCE: the scripts/145 output folder (cached step-6 features, manifests).
 OUT=ROOT/'build/strongest_candidate_20260922/onset'
 HOLD=ROOT/'build/fixed_holdout20_20260922/queue'
 SOURCE=ROOT/'build/final_sprint_review_20260922/prior'
@@ -27,20 +46,26 @@ KEY=Q.KEY
 RULES=['reference127','capacity31','capacity63','no_unconditional_prior','no_absolute_clock','legacy_blend25']
 CLOCK=['tod_min','tod_sin','tod_cos','origin_tod_min']
 PARAMS=dict(M.PARAMS,num_threads=3)
+# FOLDS: (name, last fit date, ES start, ES end, calibration start,
+# calibration end, evaluation start, evaluation end). The evaluation blocks
+# are October, November and December 2030 (December runs to 2031-01-04).
 FOLDS=[('oct','2030-08-15','2030-08-16','2030-08-31','2030-09-01','2030-09-30','2030-10-01','2030-10-31'),
        ('nov','2030-09-15','2030-09-16','2030-09-30','2030-10-01','2030-10-31','2030-11-01','2030-11-30'),
        ('dec','2030-10-15','2030-10-16','2030-10-31','2030-11-01','2030-11-30','2030-12-01','2031-01-04')]
 
 
 def dump(path,obj):
+    """Writes `obj` as indented UTF-8 JSON to `path`, creating its folder."""
     path.parent.mkdir(parents=True,exist_ok=True)
     path.write_text(json.dumps(obj,indent=2,ensure_ascii=False)+'\n')
 
 
+# dates: every calendar date from lo to hi inclusive, as 'YYYY-MM-DD' strings.
 def dates(lo,hi):return pd.date_range(lo,hi).strftime('%Y-%m-%d').tolist()
 
 
 def rulespec(rule,features):
+    """Returns (feature list, LightGBM params) of a recipe in RULES."""
     p=dict(PARAMS);fs=list(features)
     if rule=='capacity31':p['num_leaves']=31
     elif rule=='capacity63':p['num_leaves']=63
@@ -50,6 +75,12 @@ def rulespec(rule,features):
 
 
 def load_static():
+    """Loads the cached step-6 onset train features of scripts/145 with link codes.
+
+    Returns:
+        (feature table, panels, (panel, link) -> code map, the 75 scripts/145
+        feature names, the 50 legacy feature names).
+    """
     d=pd.read_parquet(SOURCE/'onset_features.parquet')
     panels=sorted(d.panel.unique());mapping={}
     for panel in panels:
@@ -61,6 +92,13 @@ def load_static():
 
 
 def fullgrid_development(mapping,panels):
+    """Builds (or loads) step-6 features on the full link grid for onset windows of 2030-09-01 .. 2031-01-04.
+
+    The full grid includes score-ineligible cells, as decoding needs every
+    link. Windows already featurised by audit_holdout20_queue are reused; the
+    rest are built here. These rows are the folds' calibration and evaluation
+    queries.
+    """
     cache=OUT/'development_fullgrid_step6_features.parquet'
     if cache.exists():return pd.read_parquet(cache)
     win=pd.read_parquet(ROOT/'data/interim/score_sprint_20260921/recency_chain_windows.parquet')
@@ -84,10 +122,19 @@ def fullgrid_development(mapping,panels):
 
 
 def early_truth(d):
+    """Returns the number of queued labels at steps 1-5 of each window (the decoder leaves those steps free)."""
     return d[d.step.lt(6)].groupby('window_id').label.sum()
 
 
 def fullsix(d,pred,early):
+    """Rescores a step-6 decode over all six steps.
+
+    The decode predicts no queue at steps 1-5, so their queued labels only add
+    to the union; `early` gives their count per window.
+
+    Returns:
+        Per-window frame with the enlarged union and the recomputed IoU.
+    """
     f=Q.frame(d,pred)
     extra=f.window_id.map(early).fillna(0).to_numpy()
     f['union']=f.union.to_numpy()+extra
@@ -96,6 +143,21 @@ def fullsix(d,pred,early):
 
 
 def fit_predict(rule,tr,es,queries,features,oldfeatures,out):
+    """Fits one recipe with early stopping and predicts the query tables.
+
+    Args:
+        rule: recipe name, or 'legacy50' (the older 50-feature head with the
+            prior as offset).
+        tr: fit rows.
+        es: early-stopping rows.
+        queries: tables to predict (calibration, evaluation).
+        features: the 75 scripts/145 features.
+        oldfeatures: the 50 legacy features.
+        out: folder for the saved model.
+
+    Returns:
+        (list of probability arrays, one per query; model details).
+    """
     out.mkdir(parents=True,exist_ok=True)
     if rule=='legacy50':
         fs=oldfeatures;params=dict(OOF.PARAMS,num_threads=3);cats=[]
@@ -116,6 +178,15 @@ def fit_predict(rule,tr,es,queries,features,oldfeatures,out):
 
 
 def evaluate_recipe(rule,ca,ev,cp,ep,early,out,details):
+    """Calibrates the threshold on `ca`, decodes `ev` and scores it.
+
+    Writes the window scores, the predictions and the calibration
+    probabilities under `out`.
+
+    Returns:
+        Result dict: threshold, all-six-step S_onset, step-6 S_onset,
+        calibration grid, per-panel IoU and model details.
+    """
     threshold,grid=Q.calibrate(ca,cp,'queue_onset',M.GRID)
     pred=Q.decode(ev,ep,{'queue_onset':threshold})
     f=fullsix(ev,pred,early)
@@ -130,6 +201,16 @@ def evaluate_recipe(rule,ca,ev,cp,ep,early,out,details):
 
 
 def explore():
+    """Runs the three development folds for every recipe and freezes the selected recipe.
+
+    Selection gate (predeclared in protocol.json): mean fold delta against
+    reference127 above 0, at least two positive folds and worst fold delta at
+    least -.015. Among eligible recipes within .001 of the best mean, the first
+    in the preference order wins; with none eligible, reference127 stays.
+
+    Raises:
+        SystemExit: protocol.json already exists.
+    """
     OUT.mkdir(parents=True,exist_ok=True)
     protocol={'created_at_utc':datetime.now(timezone.utc).isoformat(),'script_sha256':Q.sha(__file__),
        'selection_data_last_date':'2031-01-04','fixed_holdout_not_used_for_selection':True,
@@ -147,12 +228,17 @@ def explore():
        'calibration_length_note':'all 3 inner calibration blocks >=30 calendar days; corrected before fitting'}
     if (OUT/'protocol.json').exists():raise SystemExit('Refusing to overwrite an existing exploration protocol')
     dump(OUT/'protocol.json',protocol)
+    # Training rows end on 2031-01-04, the last development day.
     cached,panels,mapping,fs,oldfs=load_static();cached=cached[cached.date.le('2031-01-04')].copy()
     full=fullgrid_development(mapping,panels)
+    # Champion development features: legacy50 training rows and the step 1-5
+    # labels used by fullsix().
     old=pd.read_parquet(HOLD/'champion_queue_onset_development_features.parquet')
     assert old.date.le('2031-01-04').all()
     truth=early_truth(old)
     results=[]
+    # Per fold: fit and ES rows from the step-6 cache, calibration and
+    # evaluation rows from the full link grid.
     for name,end,es0,es1,ca0,ca1,ev0,ev1 in FOLDS:
         fitdates=dates('2030-06-01',end)
         tr=cached[cached.date.le(end)].copy().reset_index(drop=True)
@@ -161,22 +247,26 @@ def explore():
         ev=full[full.date.between(ev0,ev1)].copy().reset_index(drop=True)
         ot=old[old.date.le(end)].copy().reset_index(drop=True)
         ov=old[old.date.between(es0,es1)].copy().reset_index(drop=True)
+        # Prior and hazard from the fold's fit dates only.
         Q.apply_prior([tr,va,ca,ev,ot,ov],fitdates,panels)
         hz=M.Hazard(cached,fitdates)
         for d in [tr,va,ca,ev]:hz.apply(d)
         dest=OUT/'development'/name
         dump(dest/'dates.json',{'fit':fitdates,'es':dates(es0,es1),'cal':dates(ca0,ca1),'eval':dates(ev0,ev1)})
         probs={};model_details={}
+        # legacy50 is fitted only as the second component of legacy_blend25.
         for rule in RULES[:-1]+['legacy50']:
             pp,detail=fit_predict(rule,ot if rule=='legacy50' else tr,ov if rule=='legacy50' else va,[ca,ev],fs,oldfs,dest)
             probs[rule]=pp;model_details[rule]=detail
             if rule!='legacy50':
                 r=evaluate_recipe(rule,ca,ev,*pp,truth,dest,detail);r['fold']=name;results.append(r)
+        # legacy_blend25: fixed .75 / .25 probability mix with its own threshold.
         blend=[.75*x+.25*y for x,y in zip(probs['reference127'],probs['legacy50'])]
         r=evaluate_recipe('legacy_blend25',ca,ev,*blend,truth,dest,
                           {'weights':{'reference127':.75,'legacy50':.25},'components':[model_details['reference127'],model_details['legacy50']]})
         r['fold']=name;results.append(r);dump(OUT/'development_results.json',results)
         del tr,va,ca,ev,ot,ov,hz,probs;gc.collect()
+    # Selection gate and near-tie preference (see protocol.json).
     table=pd.DataFrame([{'fold':r['fold'],'recipe':r['recipe'],'S_onset':r['S_onset'],'threshold':r['threshold']} for r in results])
     pivot=table.pivot(index='fold',columns='recipe',values='S_onset').loc[['oct','nov','dec']]
     delta=pivot.subtract(pivot.reference127,axis=0)
@@ -199,6 +289,16 @@ def explore():
 
 
 def holdout():
+    """Refits the selected recipe and scores it once on the 55 holdout days.
+
+    Fit, early-stopping, calibration and holdout dates come from
+    native_recipe_addendum.json. The candidate is the champion's holdout
+    predictions with the onset step-6 decisions replaced by this recipe's
+    (onset steps 1-5 set to 0); ongoing rows stay as they are.
+
+    Raises:
+        SystemExit: the holdout has already been evaluated.
+    """
     selection=json.loads((OUT/'selection.json').read_text());rule=selection['selected_recipe']
     dest=OUT/'holdout'
     if (dest/'results.json').exists():raise SystemExit('Holdout already evaluated; refusing repeat selection')

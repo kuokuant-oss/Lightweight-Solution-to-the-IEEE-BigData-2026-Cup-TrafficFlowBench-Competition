@@ -11,6 +11,21 @@ Champion hole prediction = G2v2 v2_F through eval_v2.gap_matrix (the serving fea
 V0 = the same model with the train weekday profile replaced by the leave-own-day-out split profile (train profile where
 the split profile is undefined).  Split statistics are leave-own-day-out over the whole split (tstats.SplitStats).
 Output: work/ph_<split>_<panel>.parquet"""
+# Identical copy of ../build_ph.py; strict_stats.py in this folder imports it
+# for load_panel, PANELS and LG.
+# Task 1 reproduction pipeline, step 5 (`pipeline/task1.sh`, log
+# `ph_validation`, run with --split validation); s3_build_rows.py and the
+# strict checks import its helpers. T1 is the month-specific speed correction
+# of the 90-minute holes that these tables train. Columns of ph_<split>_<panel>:
+# date, day, origin (T, slot index), cond, li (link index), step_i (0..17;
+# the cell is slot T+1+step_i), obs, y_v and y_ql (true speed in km/h, flow per
+# lane in veh/h), ch_v and ch_ql (G2v2 v2_F prediction with the train weekday
+# profile), v0_v and v0_ql (with the split profile), vcut, bid, f_<feature>
+# (G2v2 features in KEEP_F) and the split statistics s_* (tstats.SplitStats)
+# at the cell and at the slots just before (pre) and after (post) the hole.
+#
+# Usage: build_ph.py --split validation|train [--month 2031_02]
+#        [--panels ...] [--wins x|r2] [--hist restore|none]
 import os, sys, time, argparse, json
 sys.dont_write_bytecode = True
 os.environ.setdefault('OMP_NUM_THREADS', '3')
@@ -25,7 +40,10 @@ from data_v2 import block_ids
 from eval_v2 import gap_matrix, month_profiles
 HERE = Path(__file__).resolve().parent; sys.path.insert(0, str(HERE))
 from tstats import SplitStats
+# LG = 18 hole slots (90 min) and HISTN = 12 history slots, from v2feat.
 PANELS = ['D7_I10_E', 'D7_I10_W', 'D7_I210_E', 'D7_I210_W', 'D7_I405_N', 'D7_I405_S', 'D12_I5_N', 'D12_I5_S']
+# R2: ruler2 folder (candidates and selected validation pseudo windows). MD:
+# the G2v2 v2_F hole model. KEEP_F: G2v2 features kept as f_<name> columns.
 R2 = ROOT / 'build/review_20260924_ctm/ruler2'
 MD = G2V2 / 'models/v2_F'
 TSF = '%Y-%m-%dT%H:%M:%SZ'
@@ -39,6 +57,13 @@ KEEP_F = ['step', 'w', 'lin_v', 'lin_q', 'h_v', 'h_q', 'pv', 'pvd', 'pq', 'sv', 
 def pseudo_windows_validation(cands=None, check=True):
     """Re-run ruler2's selection (select_write_v2.select) recording the previous window of each sequence -> gap_min.
     cands: candidate table (default ruler2 cands_v2 on validation); check: assert equality with ruler2's windows."""
+    # Replays the selector per panel from every start day: candidates in time
+    # order, at most 5 onset and 5 ongoing windows per sequence, history
+    # coverage >= 0.7, a queue in the horizon; onset = no queue in the
+    # history; ongoing = queue at the last two history stamps and persistence
+    # IoU <= 0.9; at least 360 min after the previous window. Returns one row
+    # per distinct window with mult (number of sequences that pick it) and
+    # gap_min (minutes since the previous window, first sequence).
     c = pd.read_parquet(R2 / 'cands_v2.parquet') if cands is None else cands
     dates = sorted(c.date.unique()); d0 = pd.Timestamp(dates[0])
     by = {(p, d): g for (p, d), g in c.groupby(['panel', 'date'])}
@@ -72,6 +97,11 @@ def pseudo_windows_validation(cands=None, check=True):
 
 
 def load_panel(panel, split, month):
+    """Returns the day grids of a panel sorted by date.
+
+    Validation: masked grids of the validation month. Train: grids with truth
+    for the train days whose file name contains `month` (e.g. '2031_02').
+    """
     if split == 'validation':
         files = P1.split_masked_files(panel, 'validation')
         grids = [grid.build_masked(panel, p) for p in files]
@@ -84,6 +114,7 @@ def load_panel(panel, split, month):
 
 
 def main():
+    """Builds the pseudo-hole cell table of each panel (see the module docstring)."""
     ap = argparse.ArgumentParser(); ap.add_argument('--split', required=True, choices=['validation', 'train'])
     ap.add_argument('--month', default='2031_02'); ap.add_argument('--panels', nargs='*', default=PANELS)
     ap.add_argument('--wins', default='x', choices=['x', 'r2'], help='train only: g2v2 extended windows (x) or the ruler2 selector run on the month (r2)')
@@ -102,6 +133,8 @@ def main():
         times0 = [pd.Timestamp(t).strftime('%H:%M:%S') for t in grids[0].times]; nT = len(times0)
         par = physics.link_params(panel, links); vcut = 0.6 * par['free_speed_kmh']; lanes = np.maximum(par['lanes'], 1.0)
         bid = block_ids(panel, links)
+        # Validation: train weekday profile, static queued-speed templates,
+        # official hole start slots per date, pseudo windows, parent values.
         if a.split == 'validation':
             prof = np.load(G2W / 'g2' / f'{panel}_profile_all.npz', allow_pickle=True)
             tz = np.load(G2V2 / 'rows' / f'{panel}_tmpl.npz', allow_pickle=True)
@@ -125,6 +158,7 @@ def main():
                 cz = cz[(cz.panel == panel) & cz.date.str.startswith(a.month.replace('_', '-'))].sort_values(['date', 't'])
                 wins = pseudo_windows_validation(cz, check=False); wins['origin'] = wins.t
             off_holes = {}
+        # Split statistics over all days (leave-own-day-out through loo).
         Vs = np.stack([g.value['speed_kmh'] for g in grids]); Qs = np.stack([g.value['flow_vph'] for g in grids])
         Es = np.stack([g.eligible for g in grids])
         SS = SplitStats(Vs, Qs, Es, vcut, lanes, bid)
@@ -137,12 +171,16 @@ def main():
             oh = off_holes.get(g.date, [])
             kept = []
             for _, w in ws.iterrows():
+                # a_: first hole slot (T+1). Drop windows near the day edges
+                # and windows whose [T-12, T+31) touches an official hole.
                 a_ = int(w.origin) + 1
                 if a_ - HISTN - 1 < 0 or a_ + LG + 12 > nT: nw['edge'] += 1; continue
                 if any((a_ - 13 < o + LG) and (o < a_ + LG + 12) for o in oh): nw['off_overlap'] += 1; continue
                 if any(abs(a_ - k) < LG for k, _ in kept): nw['dup'] += 1   # overlapping pseudo holes are kept (each evaluated alone)
                 kept.append((a_, w))
             if not kept: continue
+            # Train weekday profile (HV, HQ) and the variant where the
+            # leave-own-day-out split means replace it (HVs, HQs).
             wd = pd.Timestamp(g.date).weekday(); HV, HQ = PV(wd)
             st = SS.loo(di)
             HVs = np.where(np.isfinite(st['s_v']), st['s_v'], HV); HQs = np.where(np.isfinite(st['s_ql']), st['s_ql'] * lanes[:, None], HQ)
@@ -152,6 +190,10 @@ def main():
                     r_ = cz.link_id.map(li_).to_numpy(); c_ = cz.timestamp.str[11:19].map(ti_).to_numpy()
                     CV[r_, c_] = cz.speed_kmh.to_numpy(); CQ[r_, c_] = cz.flow_vph.to_numpy()
             for a_, w in kept:
+                # Blank the hole on all links. Validation: truth = released
+                # observed values in the hole; history target cells take the
+                # parent value. Train: truth from the full-truth grid; history
+                # restored from truth (--hist restore).
                 T = a_ - 1; hs = slice(T - HISTN, T); seg = slice(a_, a_ + LG)
                 V = g.value['speed_kmh'].copy(); Q = g.value['flow_vph'].copy(); O = g.value['occupancy'].copy(); E = g.eligible
                 if a.split == 'validation':
@@ -169,6 +211,8 @@ def main():
                 ok = E[:, seg] & np.isfinite(tv) & np.isfinite(tq)
                 if not ok.any(): continue
                 res = {}
+                # ch: G2v2 v2_F with the train profile; v0: with the split
+                # profile. The flow model predicts flow per lane.
                 for nm, (hv, hq) in (('ch', (HV, HQ)), ('v0', (HVs, HQs))):
                     f = gap_matrix(V, Q, O, E, a_, nT, par, vcut, hv, hq, bid, tmed, tiqr, win)
                     X = pd.DataFrame({k: np.asarray(v).reshape(-1).astype(np.float32) for k, v in f.items()})
@@ -176,6 +220,7 @@ def main():
                     pv = np.clip(ms.predict(X[feats], num_threads=3), P1.SPEED_FLOOR, P1.SPEED_CAP).reshape(f['step'].shape)
                     pq = np.maximum(mf.predict(X[feats], num_threads=3) * np.repeat(lanes[:, None], LG, 1).reshape(-1), P1.FLOW_FLOOR).reshape(f['step'].shape)
                     res[nm] = (pv, pq, f)
+                # Keep eligible hole cells that have a truth value.
                 li, si = np.where(ok); f = res['ch'][2]
                 d = {'date': g.date, 'day': np.int16(int(g.date[8:10])), 'origin': np.int16(T), 'cond': w.condition,
                      'li': li.astype(np.int16), 'step_i': si.astype(np.int8), 'obs': obs_t[li, si],

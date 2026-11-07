@@ -3,18 +3,32 @@ prev_rej = 1 if origin T-5 was an ongoing-shaped candidate (cov>=0.7 over its 12
 and at its last step T-10) and T-5 >= T_prev + 360 (not spacing-blocked): it was then rejected by the persistence rule.
 NaN if T-5 was spacing-blocked (unknown). n_rej = consecutive such predecessors (cap 12), counting back while not blocked.
 Usage: serve_sel.py <split> [check]   (split train: also compares with the truth-candidate version)"""
+#
+# Role: reproduction pipeline (task1.sh step 4 and ongoing.sh, steps sel2_val / sel2_pri). The official selector
+# scans candidate origins every 5 minutes and keeps at least 360 minutes (6 hours) between two windows of a
+# panel; these features replay the checks it made before T, a sign of how stable the queue was before T.
+# Read by review_20260929_target092/main/serve_refit.py (ongoing decision) and, as a cross-check, by
+# g2v2/serve_v2.py.
+# Inputs: cache/<panel>_<split>.npz (masked layer, from cache/build_cache.py), the released task2
+# window_index.csv and window_history.parquet, network links.csv (free-flow speed).
+# Output: dense/sel2_<split>.parquet, one row per queue_ongoing window: window_id, panel, date, t (origin step
+# of the day), prev_rej, n_rej, gap_min (minutes since the previous official window of the panel; NaN for the
+# first one).
 import sys, glob, numpy as np, pandas as pd
 REL='/Volumes/Crucial X9/trafficflow/tfb_competition_data/kaggle_public'
 SP='/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260924_ctm/cache'
 OUT='/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260924_ctm/dense'
 split=sys.argv[1]
 rows=[]
+# The 8 corridors that have Task 2 windows.
 for p in ['D7_I10_E','D7_I10_W','D7_I210_E','D7_I210_W','D7_I405_N','D7_I405_S','D12_I5_N','D12_I5_S']:
     z=np.load(f'{SP}/{p}_{split}.npz',allow_pickle=True)
     links=z['links'].astype(str); dates=list(z['dates'].astype(str))
     lk=pd.read_csv(f'{REL}/corridors/{p}/network/links.csv',dtype={'link_id':str}).set_index('link_id').reindex(links)
+    # vc: queue speed threshold, 60% of the link's free-flow speed (km/h).
     vc=0.6*lk.free_speed_kmh.to_numpy()
     V=z['V'].astype(np.float32); E=z['E']
+    # All official windows of the panel (both conditions), in origin order; the spacing rule counts each of them.
     wi=pd.read_csv(f'{REL}/task2/{p}/{split}/window_index.csv'); wi['T']=pd.to_datetime(wi.forecast_origin,utc=True)
     wi=wi.sort_values('T').reset_index(drop=True)
     if split!='train':
@@ -24,25 +38,40 @@ for p in ['D7_I10_E','D7_I10_W','D7_I210_E','D7_I210_W','D7_I405_N','D7_I405_S',
         for d,g in h.groupby(h.ts.dt.strftime('%Y-%m-%d')):
             di=dates.index(d); c=(g.ts.dt.hour*12+g.ts.dt.minute//5).to_numpy(); r=g.link_id.map(li).to_numpy(); ok=~np.isnan(r.astype(float))
             V[di,r[ok].astype(int),c[ok]]=g.speed_kmh.to_numpy()[ok]; E[di,r[ok].astype(int),c[ok]]=g.is_score_eligible.to_numpy()[ok]==1
+    # Qo: observed queued cells (eligible, observed, speed at or below vc).
     Qo=(V<=vc[None,:,None])&E&~np.isnan(V)
     for i,w in wi.iterrows():
         if w.condition!='queue_ongoing': continue
         T=w['T']; di=dates.index(T.strftime('%Y-%m-%d')); t=T.hour*12+T.minute//5
+        # Origin of the previous official window of the panel (from the window index, known before T).
         Tprev=wi['T'].iloc[i-1] if i>0 else None
         def shaped(o):  # origin index o: history o-12..o-1
+            """Returns True when origin step o would be an ongoing-shaped candidate.
+
+            Args:
+                o: origin step of the day; its history is steps o-12..o-1.
+
+            Returns:
+                True when at least 70% of the history cells (all links) are eligible, some history cell is
+                queued, and some link is queued at both o-1 and o-2.
+            """
             if o-12<0: return False
             cov=E[di,:,o-12:o].mean(); return bool(cov>=0.7 and Qo[di,:,o-12:o].any() and Qo[di,:,o-1].any() and Qo[di,:,o-2].any())
         def blocked(o):
+            """Returns True when origin step o is within 360 minutes of the previous window (spacing rule)."""
             To=T.normalize()+pd.Timedelta(minutes=5*o)
             return Tprev is not None and (To-Tprev).total_seconds()/60<360
+        # T-5 blocked by spacing: whether it was a rejected candidate is unknown.
         if blocked(t-1): pr=np.nan; nr=np.nan
         else:
+            # Count consecutive earlier origins T-5, T-10, ... that were ongoing-shaped and free of the spacing rule.
             k=0
             while k<12 and not blocked(t-1-k) and shaped(t-1-k): k+=1
             pr=float(k>0); nr=float(k)
         rows.append(dict(window_id=w.window_id,panel=p,date=T.strftime('%Y-%m-%d'),t=t,prev_rej=pr,n_rej=nr,gap_min=(T-Tprev).total_seconds()/60 if Tprev is not None else np.nan))
 d=pd.DataFrame(rows); d.to_parquet(f'{OUT}/sel2_{split}.parquet',index=False)
 print(split,len(d),'prev_rej mean',round(d.prev_rej.mean(),3),'unknown share',round(d.prev_rej.isna().mean(),3))
+# Train only: agreement with the truth-based candidate table of rep2.
 if split=='train':
     c=pd.read_parquet('/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260924_ctm/rep2/candidates_v2.parquet')
     shp=((c['cov']>=0.7)&c.hor_any.astype(bool)&c.hist_any.astype(bool)&c.last_any.astype(bool)&(c.piou>0.9))

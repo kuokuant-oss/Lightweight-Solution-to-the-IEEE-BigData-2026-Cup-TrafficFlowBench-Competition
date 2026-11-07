@@ -1,4 +1,14 @@
 """Ongoing variants: P1 recipe with feature subsets; evaluate in-world (Feb) and new-world (val pseudo)."""
+# Training record of the location-free ongoing models. LightGBM link-queue
+# heads are trained on replicated train windows (fit through 2030-12-31, early
+# stopping on January 2031, threshold calibration on February 2031) and scored
+# on validation pseudo windows. P1 is the 76-feature ongoing recipe of
+# build/review_20260923/ongoing_P1. In the reproduction only the module-level
+# setup runs: ogens_serve.py imports og_ens.py, which imports this file for
+# `Q` (scripts/strongest_20260922_ongoing.py, whose `predict` serves the
+# members) and `FS0` (the P1 feature list).
+#
+# Usage: og_exp.py [variant ...]   (default: every variant)
 import os
 for n in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS'): os.environ[n] = '6'
 import sys, json, importlib.util, gc, glob
@@ -15,12 +25,23 @@ PARAMS = dict(Q.NEW_PARAMS, num_threads=6)
 
 
 def weights(d):
+    """Returns training weights that give every panel the same total weight.
+
+    Each row gets 1 / (rows of its window x windows of its panel), so all
+    windows of a panel weigh the same; the weights are scaled to mean 1.
+    """
     nc = d.groupby('window_id').label.transform('size').to_numpy(float)
     pwin = d[['panel', 'window_id']].drop_duplicates().groupby('panel').size()
     w = 1 / (nc * d.panel.map(pwin).to_numpy()); return w / w.mean()
 
 
 def load_train():
+    """Returns the replicated train ongoing rows with codes, periods and priors.
+
+    Reads the cache og_train_all.parquet when present, else builds it from
+    queue_ongoing_*.parquet. `period` is 'fit' (through 2030-12-31), 'es'
+    (January 2031, early stopping) or 'cal' (February 2031, calibration).
+    """
     cache = HERE / 'og_train_all.parquet'
     if cache.exists(): return pd.read_parquet(cache)
     d = pd.concat([pd.read_parquet(p) for p in sorted(glob.glob(str(HERE / 'queue_ongoing_*.parquet')))], ignore_index=True)
@@ -31,6 +52,7 @@ def load_train():
 
 
 def inworld_score(ca, p, thr):
+    """Returns the February ongoing score at threshold `thr` and its per-window frame."""
     fr = Q.frame(ca, p, thr)
     fr['condition'] = 'queue_ongoing'
     fr = fr.rename(columns={'IoU': 'iou'})
@@ -38,6 +60,19 @@ def inworld_score(ca, p, thr):
 
 
 def run(name, FS, d, pv, extra_train=None):
+    """Trains one ongoing variant and scores it in-world and on pseudo windows.
+
+    Args:
+      name: variant name; names containing 's2' use a second seed.
+      FS: feature list.
+      d: train rows from load_train.
+      pv: ongoing rows of the validation pseudo windows.
+      extra_train: optional extra fit rows.
+
+    Returns:
+      (model, February-calibrated threshold, result dict). Also saves the
+      model og_<name>.txt and the pseudo-window probabilities.
+    """
     PARAMS['seed'] = 20260922 + (7 if 's2' in name else 0)
     tr = d[d.period.eq('fit') & d._eligible]; es = d[d.period.eq('es') & d._eligible]; ca = d[d.period.eq('cal')].reset_index(drop=True)
     if extra_train is not None: tr = pd.concat([tr, extra_train], ignore_index=True)
@@ -64,6 +99,9 @@ def run(name, FS, d, pv, extra_train=None):
 if __name__ == '__main__':
     d = load_train()
     pv = pd.read_parquet(HERE / 'serve_pv.parquet'); pv = pv[pv.condition.eq('queue_ongoing')].reset_index(drop=True)
+    # Variants remove, step by step, the link/panel codes (ID), the queue
+    # prior, the clock features and the milepost; V2 (no ID, no prior) is the
+    # location-free set used by the ensemble.
     CLOCK = ['tod_min', 'tod_sin', 'tod_cos', 'origin_tod_min']
     ID = ['link_code', 'panel_code']
     variants = {
@@ -73,6 +111,7 @@ if __name__ == '__main__':
         'V3_noID_noPrior_noClock': [f for f in FS0 if f not in ID + ['queue_prior'] + CLOCK],
         'V4_noMem': [f for f in FS0 if f not in ID + ['queue_prior'] + CLOCK + ['milepost']],
     }
+    # Queue-geometry features of geom.py (geom_train_* / geom_serve_* tables).
     GEOM = ['g_gap_km', 'g_gap_links', 'g_tail_vel', 'g_rh_w', 'g_eta_rh', 'g_eta_vel', 'g_block_len_km', 'g_block_links', 'g_head_age',
             'g_in_block', 'g_pos_in_block_km', 'g_clear_eta_rh', 'g_n_blocks', 'g_link_age', 'g_q_up', 'g_q_in', 'g_tail_age',
             'g_eta_rh_m_step', 'g_eta_vel_m_step', 'g_clear_m_step']

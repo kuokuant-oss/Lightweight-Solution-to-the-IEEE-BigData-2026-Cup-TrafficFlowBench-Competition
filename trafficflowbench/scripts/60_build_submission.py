@@ -7,6 +7,15 @@ Task 4  official NNLS, REG_LAMBDA = 0.05 (doc/plan §4)
 
 Nothing here reads the 56-day val fold.
 """
+
+# Role: the first (v1) whole-submission builder, kept as the record of that
+# build. The reproduction pipeline uses only build_odme(): pipeline/od.py
+# imports this file unchanged, points OUT at the run tree and calls
+# build_odme() for Task 4.
+# Outputs under OUT: state_submission.csv, queue_submission.csv and
+# path_flow_submission.csv, merged by the official merge_submissions.py into
+# submission.csv.
+
 from __future__ import annotations
 
 import subprocess
@@ -18,18 +27,30 @@ import pandas as pd
 from scipy.optimize import nnls
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Research gate (src/tfb/gate.py): returns at once unless TFB_RESEARCH_GATE=on.
 from src.tfb import gate
 gate.require()
 
 import lightgbm as lgb
 from src.tfb import predict1, release as R, score2, task2infer
 
+# OUT: the v1 delivery folder. MODELS: the v1 Task 2 boosters
+# (lgb_queue_onset.txt, lgb_queue_ongoing.txt) and their thresholds (config.csv).
 OUT = R.REPO / "build" / "submission_v1"
 MODELS = R.REPO / "data" / "interim" / "m14_task2_model"
 SPLITS = ("validation", "private")
 
 
 def build_state() -> Path:
+    """Builds the v1 Task 1 state file with the frozen linear blend.
+
+    For each split and panel, predict1.predict_panel fills the release
+    template; its history-mean member uses the train days of the dev fold.
+
+    Returns:
+        Path of state_submission.csv (panel, timestamp, station_id, link_id,
+        mask_regime, speed_kmh, flow_vph).
+    """
     w = predict1.load_weights()
     parts = []
     hist_cache = {}
@@ -55,6 +76,16 @@ def build_state() -> Path:
 
 
 def build_queue() -> Path:
+    """Builds the v1 Task 2 queue file from the two condition boosters.
+
+    Each booster's raw score is added to the logit of the train queue prior,
+    so the trees learn a correction to the prior. A cell is queued when its
+    probability reaches the threshold of its condition (onset or ongoing).
+
+    Returns:
+        Path of queue_submission.csv (window_id, timestamp, link_id,
+        queue_pred 0/1).
+    """
     cfg = pd.read_csv(MODELS / "config.csv", index_col=0).iloc[:, 0]
     thr = {c: float(cfg[f"thr_{c}"]) for c in ("queue_onset", "queue_ongoing")}
     models = {c: lgb.Booster(model_file=str(MODELS / f"lgb_{c}.txt"))
@@ -73,6 +104,7 @@ def build_queue() -> Path:
                 sel = (f.condition == cond).to_numpy()
                 if not sel.any():
                     continue
+                # Log-odds of the booster plus the log-odds of the train queue prior.
                 raw = m.predict(f.loc[sel, feats], raw_score=True) + \
                     predict1_logit(f.loc[sel, "queue_prior"].to_numpy())
                 prob[sel] = 1.0 / (1.0 + np.exp(-raw))
@@ -89,12 +121,26 @@ def build_queue() -> Path:
 
 
 def predict1_logit(p, eps=1e-4):
+    """Returns log(p / (1 - p)), with NaN read as 0 and p clipped to [eps, 1 - eps]."""
     p = np.clip(np.nan_to_num(p, nan=0.0), eps, 1 - eps)
     return np.log(p / (1 - p))
 
 
 def build_odme() -> Path:
+    """Solves the Task 4 path flows of each split and panel by regularised NNLS.
+
+    Minimises ||A_m f - c||^2 + lam * ||f - b||^2 subject to f >= 0, where A_m
+    is the link x path incidence restricted to links with a released count,
+    c the released link counts (synthetic_link_counts.csv), b the weak prior
+    path flows (synthetic_weak_prior.csv) and lam = 0.05. Each split uses only
+    its own released files.
+
+    Returns:
+        Path of path_flow_submission.csv (panel, departure_time, path_id,
+        origin_zone, destination_zone, path_flow).
+    """
     from importlib import util
+    # `spec` (a module spec for scripts/39_task4_odme.py) is not used below.
     spec = util.spec_from_file_location("t4", R.REPO / "scripts" / "39_task4_odme.py")
     parts = []
     for split in SPLITS:
@@ -106,6 +152,7 @@ def build_odme() -> Path:
             link_ids = sorted(inc.link_id.astype(str).unique())
             pi = {q: i for i, q in enumerate(path_ids)}
             li = {l: i for i, l in enumerate(link_ids)}
+            # A: link x path incidence matrix, 1 where the path uses the link.
             A = np.zeros((len(link_ids), len(path_ids)))
             A[inc.link_id.map(li).to_numpy(), inc.path_id.map(pi).to_numpy()] = 1.0
             counts = pd.read_csv(R.RELEASE / "task4" / panel / split / "synthetic_link_counts.csv",
@@ -113,12 +160,15 @@ def build_odme() -> Path:
             prior = pd.read_csv(R.RELEASE / "task4" / panel / split / "synthetic_weak_prior.csv",
                                 dtype={"path_id": str})
             b = prior.set_index("path_id").reindex(path_ids)
+            # Use the first known prior-flow column name that the file has; missing paths get 0.
             bcol = [c for c in ("weak_prior_flow", "prior_flow", "path_flow", "flow") if c in b.columns][0]
             base = pd.to_numeric(b[bcol], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+            # Only links with a released count enter the data term.
             observed = set(counts.link_id)
             measured = np.array([l in observed for l in link_ids], dtype=bool)
             c = counts.set_index("link_id").reindex(link_ids).fillna(0.0)["count"].to_numpy(dtype=float)
             lam = 0.05
+            # Stacked system [A_m; sqrt(lam) I] f ~ [c; sqrt(lam) b] solved by scipy's nnls.
             aa = np.vstack([A[measured], np.sqrt(lam) * np.eye(A.shape[1])])
             bb = np.concatenate([c[measured], np.sqrt(lam) * base])
             f, _ = nnls(aa, bb)
@@ -140,6 +190,7 @@ def build_odme() -> Path:
 
 
 def main() -> None:
+    """Builds the three v1 parts and merges them with the official merge_submissions.py into OUT/submission.csv."""
     OUT.mkdir(parents=True, exist_ok=True)
     print("=== Task 1 ==="); state = build_state()
     print("=== Task 2 ==="); queue = build_queue()

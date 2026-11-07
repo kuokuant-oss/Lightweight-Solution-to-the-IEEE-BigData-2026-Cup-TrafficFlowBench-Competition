@@ -6,6 +6,10 @@ Per panel, from the released private masked layer only:
       pilot's official rows off_rows_private (so both came from private data only);
   (4) STRICT columns: split statistics over ONE day-parity half only -> verify/work/strict_private_<panel>.parquet.
 Usage: v1b_strict_private.py [panels]"""
+# Task 1 reproduction pipeline, step 7 (`pipeline/task1.sh`, log
+# `strict_private`). Writes verify/work/strict_private_<panel>.parquet for the
+# strict odd/even HM25 heads and verify/results/v4_private_legality.json with
+# the results of checks (1)-(3).
 import os, sys, json
 sys.dont_write_bytecode = True
 os.environ['OMP_NUM_THREADS'] = '3'
@@ -21,6 +25,15 @@ RAWC = ['s_v', 's_ql', 's_qf', 's_n', 's_vq', 's_tq', 's_bqf']
 
 
 def stats_at(st, li, cc, pre, post):
+    """Returns the split statistics of rows at their cell and around the hole.
+
+    Args:
+      st: dict of (L, T) arrays from SplitStats.loo.
+      li: link index per row.
+      cc: slot of the cell per row.
+      pre: last history slot (T) per row.
+      post: first slot after the hole (T+1+LG) per row.
+    """
     o = {k: st[k][li, cc] for k in RAWC}
     for k, c_ in (('pre', pre), ('post', post)):
         o[f's_v_{k}'] = st['s_v'][li, c_]; o[f's_qf_{k}'] = st['s_qf'][li, c_]; o[f's_bqf_{k}'] = st['s_bqf'][li, c_]
@@ -28,6 +41,12 @@ def stats_at(st, li, cc, pre, post):
 
 
 def cmp(D, di, li, cc, pre, post, SS, tag):
+    """Compares recomputed leave-own-day-out statistics with the stored s_* columns of D.
+
+    Returns:
+      {'<tag>_max_abs': largest absolute difference, '<tag>_nan_mismatch':
+      number of values that are NaN on one side only}.
+    """
     mx = 0.0; nanmis = 0
     for d in np.unique(di):
         m = di == d; o = stats_at(SS.loo(d), li[m], cc[m], pre[m], post[m])
@@ -39,6 +58,7 @@ def cmp(D, di, li, cc, pre, post, SS, tag):
 
 
 def main():
+    """Runs checks (1)-(4) on each private panel; writes the strict columns and the report."""
     panels = sys.argv[1:] or B.PANELS; allres = {}
     Of_all = pd.read_parquet(LENS / 'work' / 'off_rows_private.parquet')
     for panel in panels:

@@ -1,6 +1,12 @@
 """Served recipe of the round-2 task1_trans FS correction, SPEED ONLY (one code path for evaluation and serving).
 Feature set, derived columns and hyperparameters are copied verbatim from round2/task1_trans/eval_holes.py (fixed in
 its pre-registration).  fit(rows) -> booster on r_v = y_v - ch_v; apply(booster, rows) -> clip(ch_v + dv, floor, cap)."""
+# T1 (step 6 of `pipeline/task1.sh`) is the month-specific speed correction of
+# the 90-minute holes. A LightGBM model learns the speed error of the hole model
+# (G2v2 v2_F, column ch_v) on pseudo holes cut from the same month's observed
+# data, then corrects the official hole speeds of that month. "FS" names the
+# feature set: the hole-model features (BASE) plus the split statistics
+# (SPLIT). s1_ldo_validation.py and s6_serve.py use this module.
 import os
 os.environ.setdefault('OMP_NUM_THREADS', '3')
 import numpy as np, pandas as pd, lightgbm as lgb
@@ -15,10 +21,14 @@ KEEP_F = ['step', 'w', 'lin_v', 'lin_q', 'h_v', 'h_q', 'pv', 'pvd', 'pq', 'sv', 
           'capacity_vph', 'cond_on', 'prev_rej', 'n_rej', 'blk1', 'bsize', 'bq_pre0', 'bq_hist', 'bq_post', 'bq_postd',
           'tmpl_dyn', 'tmpl_dyn_age', 'tmpl_post', 'tmpl_post_d', 'tmpl_stat', 'dq_up_pre', 'dq_dn_pre', 'nq_pre',
           'dq_up_post', 'dq_dn_post', 'nq_post']
+# BASE: hole-model prediction and features. SPLIT: leave-own-day-out split
+# statistics (tstats.py) and their differences from the train profile and
+# template (derive).
 BASE = ['ch_v', 'ch_ql'] + ['f_' + k for k in KEEP_F]
 SPLIT = ['s_v', 's_ql', 's_qf', 's_n', 's_vq', 's_tq', 's_bqf', 's_v_pre', 's_qf_pre', 's_bqf_pre', 's_v_post', 's_qf_post',
          's_bqf_post', 'd_sv', 'd_sq', 'd_tq', 'd_vq', 'an_pre', 'an_post', 'd_ch_s']
 FEATS = BASE + SPLIT
+# Fixed LightGBM recipe: NR = 300 trees.
 PAR = dict(objective='l2', learning_rate=0.05, num_leaves=31, min_data_in_leaf=400, feature_fraction=0.8, bagging_fraction=0.8,
            bagging_freq=1, lambda_l2=10.0, num_threads=3, seed=7, verbose=-1)
 NR = 300
@@ -26,6 +36,14 @@ SPEED_FLOOR, SPEED_CAP = 6.0, 120.74999999999999   # src/tfb/predict1.py
 
 
 def derive(D):
+    """Adds the derived split-statistic columns to D in place and returns D.
+
+    d_sv, d_sq: split mean speed and flow per lane minus the train profile;
+    d_tq, d_vq: split queued-speed means minus the static template; an_pre,
+    an_post: the hole-model features f_pv3 and f_sv3 over the split mean
+    speed before and after the hole; d_ch_s: hole-model speed minus the split
+    mean speed.
+    """
     with np.errstate(all='ignore'):
         D['d_sv'] = D.s_v - D.f_h_v; D['d_sq'] = D.s_ql - D.f_h_q / D.f_lanes.clip(lower=1)
         D['d_tq'] = D.s_tq - D.f_tmpl_stat; D['d_vq'] = D.s_vq - D.f_tmpl_stat
@@ -34,6 +52,12 @@ def derive(D):
 
 
 def load_ph(paths):
+    """Loads pseudo-hole tables and adds the derived columns.
+
+    Adds r_v and r_q (truth minus hole-model speed and flow per lane), half
+    ('A' = odd day of the month, 'B' = even), wid (window id) and pd_
+    (panel-day).
+    """
     D = pd.concat([pd.read_parquet(p) for p in paths], ignore_index=True)
     derive(D)
     D['r_v'] = D.y_v - D.ch_v; D['r_q'] = D.y_ql - D.ch_ql
@@ -44,10 +68,12 @@ def load_ph(paths):
 
 
 def fit(tr, seed=7):
+    """Fits the speed correction (target r_v) on rows `tr` with the fixed recipe."""
     return lgb.train(dict(PAR, seed=seed), lgb.Dataset(tr[FEATS], tr['r_v']), NR)
 
 
 def correction(model, X):
+    """Returns the predicted speed correction dv (km/h) for each row of X."""
     return model.predict(X[FEATS], num_threads=3)
 
 
@@ -94,6 +120,7 @@ def rel_table(D, pv, boot=True, B=400):
 
 
 def desc(x):
+    """Returns n, mean, absolute mean and percentiles of the finite values of x."""
     x = np.asarray(x, float); x = x[np.isfinite(x)]
     return dict(n=len(x), mean=float(x.mean()), abs_mean=float(np.abs(x).mean()), p01=float(np.percentile(x, 1)),
                 p99=float(np.percentile(x, 99)), abs_p90=float(np.percentile(np.abs(x), 90)), abs_p99=float(np.percentile(np.abs(x), 99)))

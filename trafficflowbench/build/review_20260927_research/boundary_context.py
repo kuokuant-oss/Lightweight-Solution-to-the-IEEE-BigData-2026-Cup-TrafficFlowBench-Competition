@@ -1,16 +1,50 @@
 """Observed-only, full boundary sequence features. No targets or filled values enter context."""
+# Research record. pipeline/task1.sh does not call its functions, but
+# serve_candidate.py imports this module for the grid, physics and predict1
+# modules (the import also creates the boundary/ folder).
+# The context of a hole row comes from observed cells only: the 12 slots
+# before the forecast time T (t-12..t-1) and the 12 slots after the 18-step
+# gap (t+19..t+30). `run` tests whether these features improve the T1 or HM25
+# hole speed with strict odd/even fits.
+# Outputs in boundary/: context_<split>_<official|pseudo>_<panel>.parquet,
+# <split>_<l2|mixture>_predictions.parquet, <split>_<l2|mixture>_results.json
+# and features.json.
+# Usage: boundary_context.py [--split validation|private|train_r2] [--mixture] [--build-only]
+#
+# The star import of common brings the folders (HERE, R2, R3, HM), S
+# (serve_lib), numpy/pandas/LightGBM and load / strict / evaluate.
 from common import *
 sys.path.insert(0,str(R2));import build_ph as B
 from src.tfb import grid,physics,predict1 as P1,release as R
 DEST=HERE/'boundary';DEST.mkdir(exist_ok=True)
+# WK: one context row per panel, date, window origin and link.
 WK=['panel','date','origin','li']
 
 def extract(V,Q,E,t,bid,vf,cap):
+    """Builds the boundary context features of every link for one hole.
+
+    Args:
+      V: Speed array, links x slots (km/h), NaN where not observed.
+      Q: Flow array, links x slots (vph), NaN where not observed.
+      E: Score-eligible mask, links x slots.
+      t: Slot of the forecast time; the hole covers slots t+1..t+18.
+      bid: Link group id per link (-1 = no group).
+      vf: Free-flow speed per link (km/h).
+      cap: Capacity per link (vph).
+
+    Returns:
+      Dict of float32 arrays (one value per link) named ctx_<kind>_<j>, with
+      j = 0..23 over the slots t-12..t-1 and t+19..t+30. Kinds: 'v' speed /
+      free-flow speed, 'q' flow / capacity, 'vm' and 'qm' observed flags,
+      'bq' queued share of the observed links of the link group, 'bn'
+      observed share of the group's links.
+    """
     # Enforce whole-corridor hole even if the caller passes unmasked arrays.
     V=V.copy();Q=Q.copy();V[:,t+1:t+19]=np.nan;Q[:,t+1:t+19]=np.nan
     columns=np.r_[np.arange(t-12,t),np.arange(t+19,t+31)]
     assert np.all((columns<=t)|(columns>=t+19))
     vv=V[:,columns];qq=Q[:,columns];ee=E[:,columns]
+    # Queued: observed speed at most 60 % of free-flow speed.
     valid=np.isfinite(vv);validq=np.isfinite(qq);queue=valid&(vv<=.6*vf[:,None])
     bq=np.full(vv.shape,np.nan);bn=np.zeros(vv.shape)
     # Unknown blocks stay singleton; never gather all bid=-1 as one unit.
@@ -25,6 +59,18 @@ def extract(V,Q,E,t,bid,vf,cap):
     return feat
 
 def build(split='validation',official=False):
+    """Writes the boundary context table of one split, one file per panel.
+
+    Args:
+      split: 'validation' or 'private' (released months), or 'train_r2'
+        (February 2031 training pseudo holes).
+      official: When True, uses the official hole rows (off_rows_<split>)
+        instead of the pseudo holes.
+
+    Raises:
+      AssertionError: When junk values written into the hole change any
+        feature (the context must not see the hole).
+    """
     src=R2 if split in ['validation','train_r2'] else R3
     of=pd.read_parquet(R3/'work'/f'off_rows_{split}.parquet') if official else None
     for panel in S.PANELS:
@@ -37,6 +83,8 @@ def build(split='validation',official=False):
             q=w[w.date==g.date]
             for t,z in q.groupby('origin',sort=False):
                 t=int(t);V=g.value['speed_kmh'].copy();Q=g.value['flow_vph'].copy()
+                # Training month: history cells hidden by the masked layer but
+                # score-eligible take their true values.
                 if split=='train_r2':
                     hs=slice(t-12,t)
                     for x,field in [(V,'speed_kmh'),(Q,'flow_vph')]:x[:,hs]=np.where(g.eligible[:,hs]&np.isnan(x[:,hs]),g.truth[field][:,hs],x[:,hs])
@@ -52,10 +100,21 @@ def build(split='validation',official=False):
         del gs,parts,out;gc.collect()
 
 def augment(d,split,official=False):
+    """Merges the stored context features onto the rows `d` by panel, date, origin and link."""
     c=pd.concat([pd.read_parquet(DEST/f'context_{split}_{"official" if official else "pseudo"}_{p}.parquet') for p in S.PANELS],ignore_index=True)
     return d.merge(c,on=WK,validate='many_to_one',sort=False)
 
 def run(split='validation',mixture=False):
+    """Fits hole speed models with the context features on odd/even halves and scores them.
+
+    Writes <split>_<mode>_predictions.parquet and <split>_<mode>_results.json
+    (relative MSE against HM25; the L2 run also against T1).
+
+    Args:
+      split: Split whose pseudo holes are used.
+      mixture: When True, fits the three HM25 heads (queue probability, free
+        and queued residuals); otherwise one L2 speed-residual model.
+    """
     build(split);d,st=load(split);d=augment(d,split)
     features=S.FEATS+[c for c in d if c.startswith('ctx_')]
     mode='mixture' if mixture else 'l2';out=d[KEY+['y_v','day','cond','hm25','t1']].copy();out['new']=np.nan

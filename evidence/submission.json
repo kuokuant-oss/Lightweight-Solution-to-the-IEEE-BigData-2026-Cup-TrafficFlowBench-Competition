@@ -1,0 +1,14 @@
+{
+  "competition": "2026-ieee-big-data-traffic-flow-bench",
+  "kaggle_submission_ref": 56745207,
+  "file_name": "submission_R26c_R21a_BND_T45.csv",
+  "submitted_utc": "2026-10-01T06:28:12.867Z",
+  "kaggle_description": "R26c: parent 56745042 (R26a) + ongoing block threshold 0.45 (DEC; 102 queue cells vs R21a); sha256=cf5869e23d8bf063d37e6636355f66b8385be1ee7e7257a9943a16783ac00fc5",
+  "status": "COMPLETE",
+  "public_score": 0.90115,
+  "private_score": 0.89493,
+  "selected_for_final_scoring": true,
+  "sha256": "cf5869e23d8bf063d37e6636355f66b8385be1ee7e7257a9943a16783ac00fc5",
+  "rows": 6980503,
+  "source": "Kaggle API, `kaggle competitions submissions -c 2026-ieee-big-data-traffic-flow-bench`, read on 2026-11-08"
+}

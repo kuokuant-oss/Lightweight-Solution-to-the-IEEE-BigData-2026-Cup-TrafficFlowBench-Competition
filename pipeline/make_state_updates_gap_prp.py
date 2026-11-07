@@ -12,12 +12,17 @@ gap_structure/d2_official_prp.py), in the keyed format that main/build_candidate
 
 usage: python make_state_updates_gap_prp.py <d2_official_updates_prp.parquet> <out.parquet> [<reference.parquet>]
 """
+# Reproduction pipeline: step 9 of pipeline/task1.sh (log prp_keyed), without the reference file.
+# PRP_plus: the two-state hole speed (queued / free-flow mixture driven by the ramp-based queue
+# probability); speeds are km/h, flows veh/h.
 import hashlib, sys
 import numpy as np, pandas as pd
 
+# Arguments: the d2 source parquet, the output parquet and an optional reference copy to compare.
 src, out = sys.argv[1], sys.argv[2]
 ref = sys.argv[3] if len(sys.argv) > 3 else None
 d = pd.read_parquet(src)
+# 128,465 rows: one per hole cell (the 90-minute gaps around the Task 2 windows) of both splits.
 assert len(d) == 128465 and d.submission_id.notna().all() and (d.submission_id % 1 == 0).all()
 k = pd.DataFrame({
     "submission_id": d.submission_id.astype(np.int64),
@@ -30,6 +35,7 @@ assert k.submission_id.is_unique
 k.to_parquet(out, index=False)
 sha = hashlib.sha256(open(out, "rb").read()).hexdigest()
 print(f"wrote {out}  rows {len(k):,}  sha256 {sha}")
+# Optional parity report against a reference copy of the original file.
 if ref:
     r = pd.read_parquet(ref)
     same_cols = list(r.columns) == list(k.columns) and all(r[c].dtype == k[c].dtype for c in r.columns)

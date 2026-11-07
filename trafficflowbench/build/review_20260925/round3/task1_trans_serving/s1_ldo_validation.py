@@ -1,5 +1,9 @@
 """R0 + R1: reproduce the parent / round-2 numbers on the validation pseudo holes, then the served recipe (speed only, clip)
 in odd/even day halves.  Reads the pilot's pseudo-hole tables read-only.  -> results/r1_validation_ldo.json"""
+# Task 1 reproduction pipeline, step 6 (`pipeline/task1.sh`, log `t1_ldo`).
+# Odd/even halves: fit on the odd days of the month, predict the even days,
+# and the reverse. The held-out predictions (work/r1_validation_ldo_pv.npy)
+# are reused by s6_serve.py for the validation split.
 import sys, json
 sys.dont_write_bytecode = True
 import numpy as np
@@ -14,6 +18,8 @@ for h in ('A', 'B'):
     m = (D.half == h).to_numpy(); r0[f'mse_v_parent_{h}'] = float(((D.ch_v - D.y_v) ** 2)[m].mean())
 pv_u = S.ldo(D, clip=False); t = S.rel_table(D, pv_u, boot=False)
 r0.update(fs_unclipped_rel_v_A=t['A']['rel_v'], fs_unclipped_rel_v_B=t['B']['rel_v'])
+# R0 must reproduce the recorded parent speed MSEs (km/h squared) and the
+# round-2 relative changes of each half.
 ok = abs(r0['mse_v_parent_A'] - 48.5156) < 1e-3 and abs(r0['mse_v_parent_B'] - 45.9596) < 1e-3 and \
      abs(r0['fs_unclipped_rel_v_A'] + 0.2303) < 5e-4 and abs(r0['fs_unclipped_rel_v_B'] + 0.2515) < 5e-4
 r0['reproduced'] = bool(ok); res['R0'] = r0
@@ -26,6 +32,8 @@ res['clip_changed_rows'] = int(np.sum(np.abs(pv - pv_u) > 1e-9))
 res['heldout_dv'] = S.desc(pv - D.ch_v.to_numpy())
 print('R1 served (clip):', {k: (v['n'], round(v['mse_v_parent'], 3), round(v['rel_v'], 4)) for k, v in t.items() if isinstance(v, dict) and 'rel_v' in v},
       t['boot_panelday'], t['panelhalves_speed_improve'], 'clip changed rows', res['clip_changed_rows'], flush=True)
+# Acceptance A: the corrected speed MSE is at least 15% below the parent's in
+# both halves.
 res['acceptance_A'] = bool(t['A']['rel_v'] <= -0.15 and t['B']['rel_v'] <= -0.15)
 print('acceptance A (<= -15% both halves):', res['acceptance_A'])
 np.save(S.HERE / 'work' / 'r1_validation_ldo_pv.npy', pv)

@@ -4,6 +4,17 @@ For an arm replacing the geom3 slot: same-operator parent decision (selrec3+geom
 (selrec3+arm3, A25), both .75*N/6+.25*A, block mean >= .5 on strict Jan31 blocks, A25 never-empty guard.
 Because the same operator does not replay R16b exactly, the candidate is a DELTA patch: R16b bits, changed only where
 arm != same-operator parent. Writes decisions + per-window transport counts. No CSV.
+# Runs in pipeline/ongoing.sh as `s2_decide.py P+M1f --sel P+M1sf --tag C1f`.
+# C1f: each N slot is the per-seed mean of the production model and the
+# monotone model (sel: selrec + M1sf; geom: geomselrec + M1f); N = mean of the
+# 6 seed columns; link probability = .75 N + .25 A; a cell is queued when its
+# link-group mean (strict blocks through 2031-01-31) at the same step is
+# >= .5; never-empty fallback to the A decode. The served bits are the R16b
+# bits, changed only where C1f differs from the same-operator parent.
+# Outputs: decisions_<tag>_<split>.npz (delta, arm, sameop_parent, r16b,
+# submission_id, submission_row_index), transport_<tag>_<split>.parquet and
+# decide_<tag>.json. make_r21a_bits.py saves the C1f delta as the R21a bits.
+# Usage: s2_decide.py ARM_EXPR [--sel SEL_EXPR] [--tag TAG]
 """
 import os, sys
 for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
@@ -13,6 +24,8 @@ from pathlib import Path
 import json, argparse
 import numpy as np, pandas as pd
 
+# Original absolute paths; bin/tfb-run maps them onto the run tree. R16B: the
+# R16b submission CSV, read only when R16b_ongoing_bits.npz is missing.
 R20 = Path("/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_round20")
 SS = R20 / "queue_data/serving_stage"
 HERE = Path(__file__).resolve().parent
@@ -21,16 +34,23 @@ R16B_SHA = "05cebca599b04cba99802d2f97ab2a2145e6992cc3af12fa77c415a5770c5d64"
 
 
 def pooled(ri, p):
+    """Returns, for every row, the mean of `p` over its (window, step, link group)."""
     return pd.Series(np.asarray(p, np.float64)).groupby([ri.window_id.to_numpy(), ri.step.to_numpy(), ri.bid.to_numpy()]).transform("mean").to_numpy()
 
 
 def decision(ri, p, pA):
+    """Returns the queue decision: link-group mean of `p` >= .5, with the never-empty fallback to the same decode of `pA`."""
     d = pooled(ri, p) >= .5
     empty = pd.Series(d).groupby(ri.window_id.to_numpy()).transform("sum").to_numpy() == 0
     return np.where(empty, pooled(ri, pA) >= .5, d)
 
 
 def r16b_bits():
+    """Returns the R16b ongoing bits per split in SUBMISSION_MAP order.
+
+    Loads R16b_ongoing_bits.npz (written by make_r16b_bits.py in the package
+    run); otherwise reads the R16b CSV and saves that file.
+    """
     path = HERE / "R16b_ongoing_bits.npz"
     if path.exists():
         z = np.load(path); return {s: z[s] for s in ("validation", "private")}
@@ -55,6 +75,14 @@ def r16b_bits():
 
 
 def run(arm_expr, tag, sel_expr="P"):
+    """Decides one arm against the same-operator parent and writes the delta patch.
+
+    Args:
+      arm_expr: '+'-separated probability kinds averaged into the geom slot
+        ('P' = the parent geomselrec probabilities).
+      tag: Output name.
+      sel_expr: The same for the selrec slot ('P' = the parent selrec).
+    """
     bits = r16b_bits(); res = {}
     for split in ("validation", "private"):
         ri = pd.read_parquet(SS / f"{split}_ROW_INDEX.parquet")

@@ -36,9 +36,27 @@ import pandas as pd
 
 from . import release as R
 
+# Role: task2infer.features_for_split and task2oof.base_features call `sign`
+# only with directed=True, which no program in this repository passes; the
+# shipped features therefore use sgn = +1 (traffic toward increasing
+# milepost).
+# Later on-ramp and off-ramp flow-balance checks showed that traffic moves
+# toward increasing milepost on all eight Task 2 corridors; the W/S edges of
+# lwr_mainline_topology point the other way. sgn = +1 is the correct direction.
+
 
 @functools.lru_cache(maxsize=None)
 def _vote(panel: str) -> tuple[int, int]:
+    """Counts mainline topology edges that rise or fall in milepost.
+
+    Reads the panel's released ``lwr_mainline_topology`` table and the link
+    mileposts of its first train truth day; edges whose links lack a milepost
+    are skipped.
+
+    Returns:
+        (inc, dec): number of edges whose outgoing link has a higher milepost,
+        and number whose outgoing link has a lower one.
+    """
     topo = R.network(panel, "lwr_mainline_topology")
     t = pd.read_parquet(R.truth_files(panel, "train")[0], columns=["link_id", "milepost"])
     mp = dict(zip(t.link_id.astype(str), t.milepost.astype(float)))
@@ -69,4 +87,5 @@ def sign(panel: str) -> int:
 
 
 def signs() -> dict[str, int]:
+    """Returns {panel: travel-direction sign} for every released panel."""
     return {p: sign(p) for p in R.panels()}

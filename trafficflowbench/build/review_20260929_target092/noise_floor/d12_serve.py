@@ -9,24 +9,40 @@ Serve: validation + private non-hole D12 rows (rl/feats/serve_*): composition ex
 Base reproduction is asserted against rl/rlb_state_rows.parquet (the D12 rows every later champion kept).
 Writes d12_state_updates_S2_{200,100}.parquet (submission_id, speed_kmh, flow_vph) for rows whose 3-dp value changes.
 """
+# Runs in pipeline/task1.sh step 8 ("d12"). The D12_I405 N/S pair has Task 1
+# cells only. RL_final: the residual LightGBM (speed y_v, per-lane flow y_q)
+# that corrects the stacked fill, fit without the D12_I405 pair; S2: the
+# stage-2 heads of this file. The package run loads the frozen heads
+# d12_prod_stage2_y_{v,q}.txt. The pipeline layer reads
+# d12_state_updates_S2_100.parquet (first 100 trees of each head).
 import os
+# Caps the BLAS/OpenMP thread pools at 2 before numpy and LightGBM load.
 for k in ['OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS']: os.environ[k] = '2'
 import sys, json, gc, time, hashlib
 from pathlib import Path
 import numpy as np, pandas as pd, lightgbm as lgb
 HERE = Path(__file__).resolve().parent; ROOT = HERE.parents[2]; RL = ROOT / 'build/review_20260924_ctm/rl'
 D12 = ['D12_I405_N', 'D12_I405_S']
+# P2: stage-2 LightGBM recipe.
 P2 = dict(objective='l2', learning_rate=0.05, num_leaves=31, min_data_in_leaf=300, feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1,
           lambda_l2=10.0, num_threads=2, verbose=-1, seed=0)
 
 
 def main():
+    """Loads (or fits) the D12_I405 stage-2 heads, checks them and writes the keyed updates.
+
+    Raises:
+      AssertionError: When the rebuilt RL_final rows differ from
+        rlb_state_rows.parquet by more than 5e-4, or an output file already
+        exists.
+    """
     t0 = time.time(); md = RL / 'models/RL_final'; fs = json.load(open(md / 'feats.json'))
     base = {y: lgb.Booster(model_file=str(md / f'{y}.txt')) for y in ('y_v', 'y_q')}
     if all((HERE / f'd12_prod_stage2_{y}.txt').exists() for y in ('y_v', 'y_q')):   # package edit: serve the frozen stage-2 heads (the fit reads Jan+Feb train caches)
         S2 = {y: lgb.Booster(model_file=str(HERE / f'd12_prod_stage2_{y}.txt')) for y in ('y_v', 'y_q')}; print('frozen stage-2 heads', flush=True)
     else:
         tr = pd.concat([pd.read_parquet(RL / 'feats' / f'{p}_{m}.parquet', columns=fs + ['y_v', 'y_q']) for p in D12 for m in ('2031_01', '2031_02')], ignore_index=True)
+        # Free-flow cells (p_r >= 0.85) enter as a 30 % sample with weight 1 / 0.3.
         free = (tr.p_r >= 0.85).to_numpy(); U = np.random.default_rng(0).random(len(tr)); sub = ~free | (U < 0.3); w = np.where(free, 1 / 0.3, 1.0)
         S2 = {}
         for y in ('y_v', 'y_q'):
@@ -54,6 +70,8 @@ def main():
                 T = pd.read_parquet(RL / 'feats' / f'serve_{p}_{split}.parquet')
                 pv = base['y_v'].predict(T[fs], num_threads=2); pq = base['y_q'].predict(T[fs], num_threads=2)
                 sv = S2['y_v'].predict(T[fs], num_iteration=k, num_threads=2); sq = S2['y_q'].predict(T[fs], num_iteration=k, num_threads=2)
+                # RL_final composition (v0, q0) and with the stage-2 terms (v1, q1):
+                # speed in [6, 120.75] km/h, total flow >= 50 vph, 3 decimals.
                 ln = T.lane_n.to_numpy(float); c1v = T.c1_v.to_numpy(float); c1q = T.c1_q.to_numpy(float)
                 v0 = np.round(np.clip(c1v + pv, 6.0, 120.74999999999999), 3); q0 = np.round(np.maximum((c1q / ln + pq) * ln, 50.0), 3)
                 v1 = np.round(np.clip(c1v + pv + sv, 6.0, 120.74999999999999), 3); q1 = np.round(np.maximum((c1q / ln + pq + sq) * ln, 50.0), 3)

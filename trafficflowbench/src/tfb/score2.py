@@ -42,6 +42,7 @@ def _task2_parts(split: str, name: str):
 
 
 def window_index(split: str = "train") -> pd.DataFrame:
+    """Concatenates the Task 2 `window_index.csv` of every panel for one split, adding `panel` when missing."""
     parts = []
     for panel, p in _task2_parts(split, "window_index.csv"):
         f = pd.read_csv(p)
@@ -52,6 +53,12 @@ def window_index(split: str = "train") -> pd.DataFrame:
 
 
 def window_history(split: str = "train") -> pd.DataFrame:
+    """Concatenates the Task 2 `window_history.parquet` of every panel for one split.
+
+    Returns:
+        Rows (window_id, timestamp, link_id, speed_kmh, is_score_eligible,
+        panel): the released history of each window before its forecast time.
+    """
     cols = ["window_id", "timestamp", "link_id", "speed_kmh", "is_score_eligible"]
     parts = []
     for panel, p in _task2_parts(split, "window_history.parquet"):
@@ -62,6 +69,7 @@ def window_history(split: str = "train") -> pd.DataFrame:
 
 
 def iou(pred: np.ndarray, truth: np.ndarray) -> float:
+    """Returns |pred AND truth| / |pred OR truth| over boolean cells, 1.0 when both are empty."""
     inter = int(np.logical_and(pred, truth).sum())
     union = int(np.logical_or(pred, truth).sum())
     return 1.0 if union == 0 else inter / union

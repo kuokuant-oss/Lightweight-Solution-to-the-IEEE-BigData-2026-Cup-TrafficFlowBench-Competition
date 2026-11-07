@@ -24,6 +24,21 @@ Serving-consistency, concretely (each point verified in the parity audit):
 Only ``queue_prior`` depends on the fold, so the base features are built once
 and that one column is recomputed per fold.
 """
+#
+# Role in the package: the Task 2 LightGBM training library. The onset and
+# ongoing model scripts (scripts/145_onset_prior_forward.py,
+# scripts/strongest_20260922_ongoing.py) build their training rows with
+# base_features and train with PARAMS, window_weights and logit; the onset
+# and ongoing reproduction steps load those scripts. The fold and prior
+# helpers serve the out-of-fold (OOF) studies, for example task2abl.
+#
+# Model form: one binary classifier per condition whose starting score
+# (LightGBM init_score) is logit(queue_prior), the historical queue rate of
+# the cell's (link, time of day), so the trees learn the departure from that
+# rate. A row is one (window, link, horizon step 1..6) cell; its label is 1
+# when the cell is queued. "dev" is the development fold of the train days.
+# scripts/NN and notes/NN X refer to development records that are not part
+# of this package.
 from __future__ import annotations
 
 import numpy as np
@@ -38,17 +53,21 @@ PARAMS = dict(boosting_type="gbdt", objective="binary", metric="binary_logloss",
               bagging_fraction=0.8, bagging_freq=5,
               lambda_l1=8.544245989665272, lambda_l2=0.09577740930772316,
               min_child_samples=10, verbose=-1, num_threads=0)
+# Upper bound on boosting rounds, and the early-stopping patience in rounds.
 NUM_BOOST_ROUND = 2000
 EARLY_STOPPING = 200
 CONDITIONS = ("queue_onset", "queue_ongoing")
+# Identifier, label and bookkeeping columns that are never model features.
 DROP = ["link_id", "label", "window_id", "panel", "condition", "fold", "step", "date"]
 
 
 def logit(p, eps=1e-4):
+    """Returns log(p / (1 - p)), with NaN read as 0 and p clipped to [eps, 1 - eps]."""
     p = np.clip(np.nan_to_num(p, nan=0.0), eps, 1 - eps)
     return np.log(p / (1 - p))
 
 
+# Training-weight schemes accepted by window_weights.
 WEIGHT_SCHEMES = ("cells", "balanced")
 
 
@@ -80,6 +99,10 @@ def window_weights(d: pd.DataFrame, scheme: str = "cells") -> np.ndarray:
               row-additive, so this is a proxy that has to be measured, not a
               derivation of the metric.
     """
+    # The note quoted above reads: "how large the gap between the two is
+    # depends on the distribution of window sizes; not yet measured".
+    # d needs window_id, link_id and label columns, one row per scored cell.
+    # The weights are rescaled to mean 1.
     if scheme not in WEIGHT_SCHEMES:
         raise ValueError(f"scheme must be one of {WEIGHT_SCHEMES}, got {scheme!r}")
     n = d.groupby("window_id").link_id.transform("size").to_numpy(dtype=float)
@@ -100,12 +123,17 @@ def date_folds(dates: list[str], n_folds: int) -> dict[str, int]:
     the error is, which needs every window to have an out-of-fold prediction.
     The per-fold scores are reported alongside, and a time trend shows up there.
     """
+    # Returns date -> fold index 0..n_folds-1, consecutive dates in one fold.
     blocks = np.array_split(np.array(sorted(dates)), n_folds)
     return {d: k for k, b in enumerate(blocks) for d in b}
 
 
 def panel_prior(panel: str, source_dates: set[str]) -> np.ndarray:
     """(link x time-of-day) queue rate over ``source_dates``. No LOO -- see module docstring."""
+    # Rate = queued cells / eligible cells per (link, time of day) over the
+    # train truth days in source_dates, links in milepost order. A cell with
+    # fewer than TB.PRIOR_MIN_DEN (5) eligible readings takes the panel-wide
+    # rate. All source days must share one (link x time) shape.
     cut = score2.v_cut(panel)
     tot_q = tot_n = None
     from .task2pool import date_of
@@ -167,6 +195,8 @@ def apply_prior_loo(d: pd.DataFrame, priors: dict[str, tuple]) -> np.ndarray:
     """Look up the leave-one-day-out prior for rows whose date is a source day,
     and the plain full-period prior for every other row -- exactly what serving
     sees for a date outside the prior's source set."""
+    # d needs panel, date, _link_idx and _tod_idx (from base_features);
+    # priors maps panel -> panel_prior_loo output.
     out = np.empty(len(d), dtype=np.float32)
     li = d._link_idx.to_numpy()
     ti = d._tod_idx.to_numpy()
@@ -297,6 +327,17 @@ def base_features(win: pd.DataFrame, progress: bool = False, oblique: bool = Fal
     ``include_ineligible`` retains all physical query cells and exposes future
     eligibility only as ``_eligible`` evaluation metadata, never a feature.
     """
+    # win: windows with panel, date, origin (grid column of T) and condition,
+    # all on train days: rows are built from the train truth files. A row is
+    # one (window, link, step 1..6) cell. Features read the history columns
+    # t-12..t-1 and the ramp flows at the last history stamp times[t-1];
+    # origin_obs adds the masked-layer observations at T itself
+    # (task2origin.from_masked, read from `split`) and the ramp flows at T.
+    # The label is the queue state at column t + step. The other switches turn
+    # optional feature families on: oblique ramp vectors, day of week (dow),
+    # Newell FD features, per-panel wave and spatial weights, time_oblique,
+    # accumulation, dispersion, the panel's travel-direction sign from
+    # task2dir.sign (directed) and the absolute time of day (clock).
     parts = []
     from . import task2dir as TD
     if origin_obs:
@@ -311,6 +352,9 @@ def base_features(win: pd.DataFrame, progress: bool = False, oblique: bool = Fal
         for date, wd in wp.groupby("date", sort=True):
             links, mp, V, Qf, O, E, Q, times = TB.day_arrays(panel, by_date[date], cut)
             n_times = len(times)
+            # Zero placeholder for the queue_prior argument of
+            # build_window_features; the fold's prior is looked up later
+            # through _link_idx and _tod_idx.
             dummy = np.zeros((len(links), n_times), float)
             rday = TB.ramp_day(panel, by_date[date].name)
             if static_cache is None or len(static_cache) != len(links):
@@ -327,6 +371,7 @@ def base_features(win: pd.DataFrame, progress: bool = False, oblique: bool = Fal
                     rnow = TB.ramp_at(rday, times[t])
                     amap = attach[["ramp_link_id", "nearest_mainline_link_id"]]
                     def _rvec(d):
+                        """Sums ramp flows (ramp_link_id -> veh/h) onto their mainline links."""
                         v = np.full(len(links), np.nan)
                         idx = {k: i for i, k in enumerate(links)}
                         for rl, ml in zip(amap.ramp_link_id.astype(str),
@@ -392,6 +437,9 @@ def apply_prior(d: pd.DataFrame, priors: dict[str, np.ndarray]) -> np.ndarray:
 def fit_fold(train: pd.DataFrame, valid: pd.DataFrame, feats: list[str],
              scheme: str = "cells"):
     """One condition, one fold. Returns the booster and its best iteration."""
+    # train / valid: rows of one condition with features, label and
+    # queue_prior; valid drives early stopping on its weighted log loss. Both
+    # start from logit(queue_prior) as init_score. scheme: see window_weights.
     import lightgbm as lgb
     dtrain = lgb.Dataset(train[feats], train.label, weight=window_weights(train, scheme),
                          init_score=logit(train.queue_prior.to_numpy()))
@@ -404,5 +452,10 @@ def fit_fold(train: pd.DataFrame, valid: pd.DataFrame, feats: list[str],
 
 
 def predict(m, d: pd.DataFrame, feats: list[str]) -> np.ndarray:
+    """Returns queue probabilities for the rows of d.
+
+    The booster's raw score is added to logit(queue_prior), the starting
+    score it was trained from, and passed through a sigmoid.
+    """
     raw = m.predict(d[feats], raw_score=True) + logit(d.queue_prior.to_numpy())
     return 1.0 / (1.0 + np.exp(-raw))

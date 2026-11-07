@@ -18,24 +18,47 @@ DATA="$RUN/tfb_competition_data/kaggle_public"
 T="$RUN/trafficflowbench"; B="$T/build"
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-3} PYTHONWARNINGS=ignore
 LOG="$RUN/logs"; mkdir -p "$LOG"
+# BSD time: with -l it adds the peak memory (maximum resident set size) to each log.
 TIME=/usr/bin/time
 
+# Tells whether a numbered step lies in the requested range FIRST..LAST.
+# Arguments:
+#   Step number.
+# Returns:
+#   0 when the step runs, non-zero otherwise.
 step() { [ "$1" -ge "$FIRST" ] && [ "$1" -le "$LAST" ]; }
 # run <log name> <program relative to trafficflowbench/> [args]   (peak RSS is in the log, from time -l)
+# Runs one project program through bin/tfb-run and writes its output to $LOG/<name>.log.
+# On failure it prints the last 30 log lines and stops the segment.
 run() {
   name=$1; shift; echo "$(date +%T) $name"
   $TIME -l "$PKG/bin/tfb-run" "$RUN" "$@" > "$LOG/$name.log" 2>&1 || { echo "FAILED $name (see $LOG/$name.log)"; tail -30 "$LOG/$name.log"; exit 1; }
 }
 # helper <log name> <pipeline helper> [args]   (package-level helpers, plain interpreter)
+# Same logging and failure handling as run(), for the scripts in pipeline/.
 helper() {
   name=$1; shift; echo "$(date +%T) $name"
   $TIME -l "$PY" "$PKG/pipeline/$@" > "$LOG/$name.log" 2>&1 || { echo "FAILED $name (see $LOG/$name.log)"; tail -30 "$LOG/$name.log"; exit 1; }
 }
+# The eight corridors (panels) with Task 2 windows; the other two (D12_I405_N/S) have Task 1 cells only.
 PANELS8="D7_I10_E D7_I10_W D7_I210_E D7_I210_W D7_I405_N D7_I405_S D12_I5_N D12_I5_S"
+# RL: folder of the residual-correction programs (RLB model, RL fallback); FEATS: their serving
+# features, including the c1all_serve_* side files that the layers below read.
 RL=build/review_20260924_ctm/rl
 FEATS="$B/review_20260924_ctm/rl/feats"
 # Parent-CSV layers (see pipeline/task1_state_csv.py). Each historical parent submission CSV that a program reads
 # is rebuilt state-only from the keyed files regenerated in this run, in the number format its builder wrote.
+# Layer names (each is one stage of the Task 1 chain, in chain order):
+#   v3     stacked fill: LightGBM weighting of five classical fills (LRTC, interpolations, profile)
+#   k*     joint density projection of speed and flow on the 5 density corridors
+#   G2     gap model inside the 90-minute holes around the Task 2 windows
+#   RLB    residual LightGBM correction of the stacked fill (RL: fallback model for D12_I405)
+#   G2v2   gap model version 2 (model v2_F); gives the final hole flow
+#   T1     month-specific hole speed correction, fitted on pseudo holes of the same split
+#   HM25, HMP50   hole speed mixture heads and their pooled version (speed only)
+#   DK50, CAP     density correction and CatBoost capacity blend on the general cells
+#   D12    stage-2 correction on the D12_I405 pair; PRP_plus: two-state hole speeds
+# Each spec is "keyed parquet (glob allowed),speed column,flow column,number format[,mask column]".
 L_V3="$FEATS/c1all_serve_*.parquet,stack_v,stack_q,np3"                                    # v3 stack (step 2)
 L_KSTAR="$B/strongest_candidate_20260922/state/transfer/serving/stateupdates.parquet,new_speed_kmh,new_flow_vph,fmt6"  # k* (step 3)
 L_G2="$FEATS/c1all_serve_*.parquet,c1_v,c1_q,fmt3,hole"                                    # G2 holes (step 4)
@@ -48,6 +71,11 @@ L_DK50="$B/review_20260927_structural/density/serving/state_updates.parquet,spee
 L_CAP="$B/model_capacity_20260927/state/serving/state_updates.parquet,speed_kmh,flow_vph,fmt3"        # CAP (step 13)
 L_D12="$B/review_20260929_target092/noise_floor/d12_state_updates_S2_100.parquet,speed_kmh,flow_vph,fmt3"  # D12 (step 14)
 L_PRP="$B/review_20260929_target092/main/state_updates_gap_prp.parquet,speed_kmh,flow_vph,fmt3"       # PRP_plus (step 14)
+# Rebuilds one historical parent submission CSV, state rows only, from the given layers.
+# Arguments:
+#   Output CSV path, then one or more layer specs (applied in order).
+# Outputs:
+#   The CSV; the helper log is $LOG/csv_<name>.log.
 csv() {   # csv <parent csv path> <layer> [<layer> ...]   (layer globs are expanded by the helper, not the shell)
   out=$1; shift; mkdir -p "$(dirname "$out")"
   set -f; args=""; for l in "$@"; do args="$args --layer $l"; done

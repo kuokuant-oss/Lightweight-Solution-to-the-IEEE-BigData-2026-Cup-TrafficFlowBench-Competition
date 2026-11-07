@@ -12,6 +12,16 @@ so scripts/113 (fit), scripts/110 (score) and scripts/112 (build) all call here.
 Task 3 has no submission of its own -- it is scored on the Task 1 answer -- so
 every change here moves S_state and S_physics together.
 """
+#
+# Role in the package: the Task 1 reproduction pipeline calls load and
+# predict_grid in the C1 rebuild (build/review_20260924_ctm/rl/serve_feats.py,
+# pipeline/task1.sh step 1) and feature_table in the k* builders (step 2).
+# Each fitted booster is a LightGBM regressor that predicts a target cell's
+# speed or flow directly from the five classical fills, their linear blend and
+# the cell's observed neighbourhood. "v3" names this stacked Task 1 answer
+# (the one scripts/112_build_submission_v3.py builds); S_state and S_physics
+# are the Task 1 and Task 3 scores. scripts/110, scripts/113 and doc/plan/...
+# are development records that are not part of this package.
 from __future__ import annotations
 
 import numpy as np
@@ -19,13 +29,35 @@ import pandas as pd
 
 from . import baselines as B, predict1 as P1, release as R
 
+# The five classical fills, in the order of predict1.METHODS and of the blend
+# weight vector W: LRTC-TNN, temporal, two-axis mean, spatial, historical mean.
 MEMBERS = ("lrtc", "temporal", "two_axis", "spatial", "hist")
+# Time offsets in 5-minute steps for the neighbour features: the same link up
+# to 30 minutes earlier (negative) or later (positive).
 OFFS = (-6, -4, -3, -2, -1, 1, 2, 3, 4, 6)
+# Link offsets in milepost order for the neighbour features: positive = that
+# many links downstream, negative = upstream, at the same stamp.
 NBR = (-3, -2, -1, 1, 2, 3)
+# Folder of the fitted stack: stack_speed.txt and stack_flow.txt (LightGBM
+# boosters) and stack_features.csv (feature order).
 DIR = R.REPO / "build" / "task1_stack"
 
 
 def members(g, di, lrtc, hist, field):
+    """Returns the five classical fills of one field on one day.
+
+    Args:
+        g: Day grid from grid.build_masked.
+        di: Index of this day in the split's LRTC tensor (third axis).
+        lrtc: Field -> (link x time x day) LRTC-TNN completion of the split.
+        hist: Historical means keyed (field, weekday), from
+            predict1.historical_mean.
+        field: "speed_kmh" or "flow_vph".
+
+    Returns:
+        Member name (MEMBERS) -> (link x time) array, NaN where the member has
+        no value.
+    """
     wd = pd.Timestamp(g.times[0]).weekday()
     ti = B.two_axis(g.value[field], g.milepost)
     return {"lrtc": lrtc[field][:, :, di], "temporal": ti["temporal"], "two_axis": ti["mean"],
@@ -42,6 +74,18 @@ def feature_table(g, di, lrtc, hist, W, par, mask=None, occ: bool = True) -> pd.
     the very quantity S_LWR differences in time. No member of the frozen blend
     reads it: LRTC and the three interpolators run on speed and flow only.
     """
+    # Further args: g, di, lrtc, hist as in members(); W: field -> blend weight
+    # vector (predict1.load_weights); par: physics.link_params output.
+    # Column families per field: blend_<field> (the frozen linear blend),
+    # <member>_<field> (each fill), t<+-k>_<field> (observed value of the same
+    # link k steps later / earlier), x<+-k>_<field> (observed value k links
+    # downstream / upstream), nobs_<field> (observed cells of the link that
+    # day). Then occupancy context, time of day (step index), weekday,
+    # milepost and the static link parameters. Neighbour values come from the
+    # masked layer, so they are NaN where those cells are blanked. np.roll wraps
+    # around: near the ends of the day or of the corridor the offset columns
+    # read the opposite end. The fitted boosters were trained on the same
+    # construction.
     m = g.target if mask is None else mask
     wd = pd.Timestamp(g.times[0]).weekday()
     cols = {}
@@ -97,6 +141,10 @@ def load():
 
 def predict_grid(g, di, lrtc, hist, W, par, models):
     """Stacked (speed, flow) fields: stack at target cells, blend elsewhere."""
+    # Args as in feature_table; models is the (speed booster, flow booster,
+    # feature order) triple from load(). Returns field -> (link x time) array:
+    # the booster predictions at the target cells (eligible and blanked) and
+    # the linear blend everywhere else, both unclipped.
     ms, mf, feats = models
     out = {}
     for f in P1.FIELDS:

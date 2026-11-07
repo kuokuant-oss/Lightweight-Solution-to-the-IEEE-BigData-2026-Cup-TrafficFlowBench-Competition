@@ -1,4 +1,15 @@
 """All-panel transfer of fixed auxiliary density with development-only scope selection."""
+
+# Role: research audit, kept as a record; the reproduction pipeline does not
+# run it. It extends the joint auxiliary-density projection
+# (audit_strongest_state_20260922.apply, family joint_aux) from the two
+# original panels (FIRST) to all ten panels. On the development calibration
+# dates it chooses among: the current two-panel rule (alpha .25), all panels
+# at one alpha, or a per-panel consensus (a panel is switched on when it gains
+# in each of three 5-day blocks). The chosen rule,
+# transfer/selection_before_held.json, is what
+# build_strongest_state_transfer_serving_20260922.py serves as k*.
+
 from pathlib import Path
 import importlib.util
 import json
@@ -13,8 +24,11 @@ from threadpoolctl import threadpool_limits
 
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 from src.tfb import release as R,grid,baselines as B,physics,score1,predict1 as P1,task1stack as TS
+# S: audit_strongest_state_20260922 (apply, evaluate, summarize); H: audit_holdout20_state.
 sp=importlib.util.spec_from_file_location("strong_state",ROOT/"scripts/audit_strongest_state_20260922.py")
 S=importlib.util.module_from_spec(sp);sp.loader.exec_module(S);H=S.H
+# CACHE: champion predictions plus k_aux of every panel and phase. OLD: the
+# earlier holdout audit's state folder. FIRST: the two panels of the first study.
 BASE=ROOT/"build/strongest_candidate_20260922/state"
 OUT=BASE/"transfer";CACHE=OUT/"cache"
 OLD=ROOT/"build/fixed_holdout20_20260922/state"
@@ -23,6 +37,23 @@ START=time.time();threadpool_limits(limits=3)
 
 
 def generate(panel,phase,models,aux,W,features,cfg):
+    """Caches one panel's champion predictions and auxiliary density for a phase.
+
+    The two original panels are copied from the earlier audit. For the other
+    panels, calibration dates get the champion recomputed (stack, fallback
+    and truth), and held dates reuse the earlier champion predictions; in both
+    cases k_aux is predicted here. Writes
+    CACHE/<phase>_<panel>_predictions.parquet and skips a file that exists.
+
+    Args:
+        panel: panel ID.
+        phase: 'calibration' or 'held'.
+        models: (speed booster, flow booster) of the Task 1 stack.
+        aux: auxiliary density booster.
+        W: frozen blend weights (stack input).
+        features: expected stack feature order.
+        cfg: the `state` section of design.json.
+    """
     dest=CACHE/f"{phase}_{panel}_predictions.parquet"
     if dest.exists():return
     original=OLD/f"{phase}_{panel}_predictions.parquet"
@@ -53,6 +84,7 @@ def generate(panel,phase,models,aux,W,features,cfg):
 
 
 def weights(panels):
+    """Returns per-panel cost weights from the champion's calibration RMSE (formula of audit_strongest_state_20260922.cost_weights)."""
     out={}
     for panel in panels:
         p=pd.read_parquet(CACHE/f"calibration_{panel}_predictions.parquet")
@@ -67,6 +99,9 @@ def weights(panels):
 
 def selection(cal,panels,dates):
     """Select among original two-panel, global transfer, and 3-block consensus."""
+    # Each rule maps panel -> alpha (0 = champion). The rule with the best
+    # pooled development .35 * S_state + .15 * S_physics wins; ties go to fewer
+    # active panels, then to the rule name.
     possibilities={"current_two_panel_joint_025":{p:(.25 if p in FIRST else 0.) for p in panels}}
     decisions=[]
     for a in [.1,.25,.5]:
@@ -93,6 +128,7 @@ def selection(cal,panels,dates):
 
 
 def main():
+    """Builds the caches, selects the transfer scope on development dates and scores it on the holdout."""
     import lightgbm as lgb
     OUT.mkdir(parents=True,exist_ok=True);CACHE.mkdir(exist_ok=True)
     design=json.loads((ROOT/"build/fixed_holdout20_20260922/design.json").read_text());cfg=design["state"]
@@ -105,16 +141,21 @@ def main():
                   weights="Perpanel state risk derivative from developmentcalibrationRMSE only, fixed beforeheld",
                   source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
     (OUT/"protocol.json").write_text(json.dumps(protocol,indent=2))
+    # Frozen stack boosters, aux density booster and blend weights; nothing is refit.
     ms,mq,fs=TS.load();aux=lgb.Booster(model_file=str(H.AUX_PATH));W=P1.load_weights()
     for panel in panels:generate(panel,"calibration",(ms,mq),aux,W,fs,cfg)
     w=weights(panels);(OUT/"weights.json").write_text(json.dumps(w,indent=2))
+    # Point the state audit's module globals at this audit's folders and panels.
     S.OUT=OUT;S.SRC=CACHE;S.PANELS=panels
+    # Arms: the unchanged champion and joint_aux at alpha .1, .25 and .5.
     recipes={"champion":("joint_aux",0.),**{f"joint_{a:g}":("joint_aux",a) for a in [.1,.25,.5]}}
     cal=S.evaluate("calibration",recipes,w);cal.to_csv(OUT/"calibration_daily.csv",index=False)
     choice=selection(cal,panels,cfg["density_calibration_dates"])
     choice.update(weights=w,selected_before_extension_held=True)
     (OUT/"selection_before_held.json").write_text(json.dumps(choice,indent=2))
     print("TRANSFER CHOICE",json.dumps(choice["panel_alphas"]),choice["rule"],flush=True)
+    # Holdout: active panels get the projection at their alpha; inactive panels
+    # keep the champion rows of the earlier audit.
     pieces=[]
     old=pd.read_csv(OLD/"held_daily.csv");old=old[old.alpha==0].copy()
     for panel,a in choice["panel_alphas"].items():
@@ -126,6 +167,7 @@ def main():
         else:
             d=old[old.panel==panel].copy();d["arm"]="candidate";pieces.append(d)
     cand=pd.concat(pieces,ignore_index=True)
+    # Reference arms from the two-panel audit's holdout table.
     first=pd.read_csv(BASE/"held_daily.csv")
     refs=first[first.arm.isin(["champion","flow_aux_0.1","flow_aux_0.25","joint_aux_0.25"])].copy()
     d=pd.concat([cand,refs],ignore_index=True);d.to_csv(OUT/"held_daily.csv",index=False)

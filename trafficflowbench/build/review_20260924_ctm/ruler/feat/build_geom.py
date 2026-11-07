@@ -1,4 +1,10 @@
 """Geometry features for train replicated windows (mode=train <cond>) or serve windows (mode=serve <root> <split> <tag>)."""
+#
+# Role: reproduction pipeline, ongoing.sh (steps ctm_geom_val / ctm_geom_pri): `build_geom.py serve <release root>
+# validation real_validation` and `... private real_private`. Train mode is the record of the training table.
+# Usage: build_geom.py train <cond> | serve <release root> <split> <tag>
+# Outputs (in this folder): geom_train_<cond>.parquet or geom_serve_<tag>.parquet; one row per (window, link,
+# horizon step) with the queue-geometry features of geom.py and window_id.
 import sys, numpy as np, pandas as pd
 from pathlib import Path
 ROOT = Path('/Volumes/Crucial X9/trafficflow/trafficflowbench'); sys.path.insert(0, str(ROOT))
@@ -9,12 +15,14 @@ import geom as G
 
 
 def static(panel, links):
+    """Returns (queue speed v_cut per link, km/h, 63 when missing; link length in km, 0.3 when missing)."""
     fd = pd.read_csv(R.RELEASE / 'corridors' / panel / 'network' / 'fd_parameters.csv', dtype={'link_id': str}).set_index('link_id')
     cut = score2.v_cut(panel)
     return np.array([cut.get(k, 63.0) for k in links]), fd.length_km.reindex(links).fillna(0.3).to_numpy(float)
 
 
 def train(cond):
+    """Builds geometry features for the replicated official train windows of one condition from full truth."""
     u = pd.read_parquet(ROOT / 'build/review_20260923/work/e2/replicated_unique.parquet')
     u = u[u.condition == cond]
     out = []
@@ -25,6 +33,7 @@ def train(cond):
             vc, ln = static(panel, links)
             for w in wd.itertuples():
                 t = int(w.origin)
+                # History t-12..t-1 (T-60..T-5).
                 f = G.step_frame(links, G.geom_features(V[:, t - 12:t], Qf[:, t - 12:t], E[:, t - 12:t], vc, ln))
                 f['window_id'] = f'{panel}|{date}|{t}'; out.append(f)
         print(panel, flush=True)
@@ -34,6 +43,10 @@ def train(cond):
 
 
 def serve(root, split, tag):
+    """Builds geometry features for the official windows of a scored split from their window history only.
+
+    Links are ordered by the mileposts of the panel's first train day file.
+    """
     R.RELEASE = Path(root)
     wi = score2.window_index(split)
     out = []

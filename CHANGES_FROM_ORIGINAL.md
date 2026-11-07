@@ -1,15 +1,44 @@
 # Changes from the original sources
 
-Every program in `trafficflowbench/` is a byte-identical copy of the version that produced the submission,
-except the files listed here. SHA prefixes are original -> package. New programs written for this package
-live in `pipeline/` and are listed per section.
+Every program in `trafficflowbench/` keeps the code of the version that produced the submission, except
+the files listed here. SHA prefixes are original -> package, taken before the comment pass below. New
+programs written for this package live in `pipeline/` and are listed per section.
+
+## Comments and docstrings (2026-11-08)
+
+English module, class and function docstrings and `#` comments were added to 161 code files in
+`trafficflowbench/`, `pipeline/`, `bin/`, `run_reproduce.sh` and `docs/figures/`. The pass only
+inserted lines. Every original line stays unchanged and in order, and no code line was added. A
+check confirmed this file by file:
+
+- **Python:** the syntax tree with docstrings removed is identical to the uncommented version.
+- **Shell:** only whole-line comments were added, none inside a here-document, and `sh -n` passes.
+
+The full reproduction run after the comment pass gave the same submission SHA256 (see
+`evidence/reproduction_checks.md`).
+
+26 files keep their exact bytes, because their SHA256 is recorded in a training manifest that a
+program checks before serving. Their explanations are in the README of their folder:
+
+- `build/review_20260927_research/{common,structure,full_pool,feb_pool,strength}.py`
+  (`frozen_recipe.json`);
+- `build/review_20260930_round20/queue_data/*.py` (top level), `tabm_models/*.py` and
+  `tabm_runtime/*.py` (`INPUT_MANIFEST.json`);
+- `scripts/strongest_20260922_ongoing.py` (`round19/queue_models/PREPARED_B.json`).
+
+## Training programs (2026-11-08)
+
+`training/` holds the 23 programs that trained the frozen models and tables, at their development
+paths. Each was copied unchanged and then given comments and docstrings by the same insertion-only
+pass, which was checked against the original file. `training/README.md` lists the original SHA256 of
+each program. The reproduction runs none of them.
 
 ## Shared (path layer and research gate)
 
 | File (under `trafficflowbench/`) | What | Why |
 |---|---|---|
 | `scripts/portable_paths.py` (`aabeb251` -> `48fa4e87`) | `_tail()` tests the run tree's own root before the old roots, and `rebase_text()` rebases all roots in one regex pass with the run tree's root listed first. | The path layer maps the development machine's absolute roots onto the run tree. Without the change, a run tree placed under one of those old roots was mapped onto itself a second time (doubled path). Behaviour is unchanged for run trees anywhere else. |
-| `src/tfb/gate.py` (`60bd2178` -> `a3ef25a5`) | `require()` returns immediately unless `TFB_RESEARCH_GATE=on`; `check()` is unchanged. | The research gate checked project notes and documents for wording during development (it does not look at data or models). Its three hits in November 2026 were false positives in archived copies of the gate itself and in a lineage note. The team lead authorised switching it off on 2026-11-07. The reproduction path does not call it; the v3 stack trainer (a training record) does. |
+| `src/tfb/gate.py` (`60bd2178` -> `a3ef25a5`) | `require()` returns immediately unless `TFB_RESEARCH_GATE=on`; `check()` is unchanged. | The research gate checked project notes and documents for wording during development (it does not look at data or models). Its three hits in November 2026 were false positives in archived copies of the gate itself and in a lineage note. The team lead authorised switching it off on 2026-11-07. In the reproduction, `pipeline/od.py` imports `scripts/60_build_submission.py`, which calls `require()` at import; with `TFB_RESEARCH_GATE` unset the call returns at once. The v3 stack trainer (a training record) calls it too. |
 
 
 ## Onset / OD

@@ -7,6 +7,7 @@ Block diagrams in the style of an architecture figure: every box names a compone
 facts, and an orange chip marks the design decision that matters most. Boxes are sized to their text.
 One drawing unit is 0.1 inch.
 """
+# Documentation only: draws the method figures; the reproduction pipeline does not run it.
 from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
@@ -14,6 +15,8 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch
 
 OUT = Path(__file__).resolve().parent
+# Colours: INK for titles, SUB for spec lines, GREY for column headers and plain arrows. PAL maps a
+# colour name to (edge, fill) of a box; CHIP is (edge, fill) of the orange decision chip.
 INK = "#17263c"; SUB = "#4f5d70"; GREY = "#5b6b80"
 PAL = {  # edge, fill
     "blue": ("#1f5f99", "#eef4fb"), "purple": ("#7a5ea8", "#f2eef8"), "orange": ("#c8742a", "#fbf1e7"),
@@ -21,11 +24,14 @@ PAL = {  # edge, fill
 }
 CHIP = ("#c8742a", "#fdf0e3")
 TS, SS, CS, HS = 16, 12, 11.5, 14         # title, spec line, chip, header (pt)
+# PADX: inner left/right padding of a box, in drawing units.
 PADX = 1.3
+# Off-screen figure used only to measure text widths (see tw).
 _mfig = plt.figure(figsize=(4, 4), dpi=100); _mren = _mfig.canvas.get_renderer()
 
 
 def tw(s, size, bold=False):
+    """Returns the rendered width of text `s` at font size `size` (pt), in drawing units."""
     t = _mfig.text(0, 0, s, fontsize=size, fontweight="bold" if bold else "normal")
     w = t.get_window_extent(renderer=_mren).width / _mfig.dpi * 10
     t.remove()
@@ -36,6 +42,14 @@ LT, LS, LC = TS / 72 * 10 * 1.05, SS / 72 * 10 * 1.25, 2.5   # line heights (uni
 
 
 def size(title, lines=(), chip=None, ts=TS):
+    """Returns (width, height) in drawing units of a box with this title, spec lines and chip.
+
+    Args:
+        title: bold title text.
+        lines: spec lines under the title.
+        chip: optional text of the orange chip at the bottom of the box.
+        ts: title font size (pt).
+    """
     w = tw(title, ts, True)
     for s in lines:
         w = max(w, tw(s, SS))
@@ -46,7 +60,24 @@ def size(title, lines=(), chip=None, ts=TS):
 
 
 class Box:
+    """A rounded box with a bold title, spec lines and an optional orange chip.
+
+    Attributes:
+        x, y, w, h: lower-left corner and size, in drawing units.
+        r, l, t, b: midpoints of the right, left, top and bottom edges (arrow anchors).
+    """
     def __init__(self, ax, x, yc, w, title, lines=(), chip=None, col="blue", ts=TS, h=None):
+        """Draws the box on `ax`, vertically centred on `yc`.
+
+        Args:
+            ax: matplotlib axes of the canvas.
+            x: left edge.
+            yc: vertical centre.
+            w: width (usually the column width from colwidth).
+            title, lines, chip, ts: as in size().
+            col: colour name in PAL.
+            h: fixed height; by default the height that fits the text.
+        """
         edge, fill = PAL[col]
         _, h0 = size(title, lines, chip, ts)
         h = h or h0
@@ -74,6 +105,7 @@ class Box:
 
 
 def canvas(xmax, ymax):
+    """Returns a figure and axes of xmax x ymax drawing units, with no margins or axis lines."""
     fig, ax = plt.subplots(figsize=(xmax / 10, ymax / 10))
     ax.set_xlim(0, xmax); ax.set_ylim(0, ymax); ax.axis("off")
     fig.subplots_adjust(0, 0, 1, 1)
@@ -81,6 +113,15 @@ def canvas(xmax, ymax):
 
 
 def arrow(ax, p0, p1, col="grey", lw=1.9, ls="-", conn=None, label=None, lx=0, ly=0.8):
+    """Draws an arrow from p0 to p1 with an optional bold label above its midpoint.
+
+    Args:
+        ax: target axes.
+        p0, p1: start and end points (drawing units).
+        col: colour name in PAL; lw, ls: line width and style.
+        conn: optional matplotlib connection style (for bent arrows).
+        label: optional text; lx, ly shift it from the midpoint.
+    """
     props = dict(arrowstyle="-|>", color=PAL[col][0], lw=lw, shrinkA=1, shrinkB=1, mutation_scale=15, linestyle=ls)
     if conn:
         props["connectionstyle"] = conn
@@ -91,23 +132,27 @@ def arrow(ax, p0, p1, col="grey", lw=1.9, ls="-", conn=None, label=None, lx=0, l
 
 
 def frame(ax, x, y, w, h, s, col):
+    """Draws a large rounded frame with caption `s` at its top left, around one row of boxes."""
     ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0,rounding_size=1.0",
                                 fc="#fbfcfe", ec=PAL[col][0], lw=1.6))
     ax.text(x + 1.3, y + h - 1.0, s, ha="left", va="top", fontsize=HS - 1, fontweight="bold", color=PAL[col][0])
 
 
 def headers(ax, y, items):
+    """Writes column headers at height y; items are (x, text) pairs."""
     for x, n in items:
         ax.text(x, y, n, ha="left", va="center", fontsize=HS, fontweight="bold", color=GREY)
 
 
 def notes(ax, x, y, items):
+    """Writes note lines (bold lead, plain rest) downward from (x, y), 2.6 units apart."""
     for i, (bold, rest) in enumerate(items):
         t = ax.text(x, y - i * 2.6, bold, ha="left", va="center", fontsize=SS + 1, fontweight="bold", color=INK)
         ax.text(x + tw(bold, SS + 1, True) + 0.8, y - i * 2.6, rest, ha="left", va="center", fontsize=SS + 1, color=SUB)
 
 
 def save(fig, name):
+    """Saves the figure as PNG (200 dpi) and SVG next to this script, then closes it."""
     for ext in ("png", "svg"):
         fig.savefig(OUT / f"{name}.{ext}", dpi=200 if ext == "png" else None, facecolor="white",
                     bbox_inches="tight", pad_inches=0.12)
@@ -115,11 +160,13 @@ def save(fig, name):
 
 
 def colwidth(specs):
+    """Returns the widest box width among the box specs (title, lines[, chip])."""
     return max(size(*s)[0] for s in specs)
 
 
 # --------------------------------------------------------------------------------------------------
 def figure_1():
+    """Draws figure 1: the inputs, the four task modules and the submission."""
     ins = [("Mainline detectors", ["speed · flow · occupancy", "every 5 min, 10 corridors"]),
            ("Ramp counts", ["on- and off-ramps"]),
            ("Window history", ["60 min up to the origin T"]),
@@ -152,6 +199,7 @@ def figure_1():
 
 # --------------------------------------------------------------------------------------------------
 def figure_2():
+    """Draws figure 2: Task 1 for ordinary missing cells and for the 90-minute gaps."""
     C = [  # column specs used only for widths
         [("Observed cells", ["same link at t ± 1, t ± 2", "links x ± 1, x ± 2", "occupancy · time · road"]),
          ("Gap boundary", ["state just before & after", "queue state · link blocks"]),
@@ -214,6 +262,7 @@ def figure_2():
 
 # --------------------------------------------------------------------------------------------------
 def figure_3():
+    """Draws figure 3: Task 2 for queue-start windows and for existing-queue windows."""
     C = [
         [("Window history", ["flow at each candidate", "bottleneck, T − 60 … T"]),
          ("State at T", ["speed · flow · occupancy", "margin to the queue speed", "trends over the last hour", "neighbours 1, 2, 4 links"]),

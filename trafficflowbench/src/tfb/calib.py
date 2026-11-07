@@ -18,10 +18,19 @@ import pandas as pd
 
 from . import release as R
 
+# Frozen tables written by scripts/111: one row per predicted-value bin
+# (bin_lo, bin_hi) with the bias of the predictions in that bin (`bias`, in the
+# field's units); apply() subtracts it.
 DIR = R.REPO / "data" / "interim" / "v3_calibration"
 
 
 def load(name: str) -> tuple[np.ndarray, np.ndarray] | None:
+    """Loads one frozen bias table, `speed_bias` or `flow_bias`.
+
+    Returns:
+        (bin centres, bias per bin) as float arrays, or None when the CSV is
+        absent, in which case apply() leaves the values unchanged.
+    """
     p = DIR / f"{name}.csv"
     if not p.exists():
         return None
@@ -43,6 +52,20 @@ def apply(x: np.ndarray, tab: tuple[np.ndarray, np.ndarray] | None, lam: float) 
 
 def calibrate_state(v: np.ndarray, q: np.ndarray, lam_v: float, lam_q: float,
                     speed_floor: float, speed_cap: float, flow_floor: float):
+    """Applies the frozen speed and flow bias maps, then the output bounds.
+
+    Args:
+        v: predicted speed (km/h).
+        q: predicted flow (veh/h).
+        lam_v: share of the speed bias to remove (0 turns the speed map off).
+        lam_q: share of the flow bias to remove (0 turns the flow map off).
+        speed_floor: lower clip for the corrected speed.
+        speed_cap: upper clip for the corrected speed.
+        flow_floor: lower bound for the corrected flow.
+
+    Returns:
+        (v2, q2): corrected speed and flow arrays.
+    """
     vb, qb = load("speed_bias"), load("flow_bias")
     v2 = np.clip(apply(v, vb, lam_v), speed_floor, speed_cap)
     q2 = np.maximum(apply(q, qb, lam_q), flow_floor)

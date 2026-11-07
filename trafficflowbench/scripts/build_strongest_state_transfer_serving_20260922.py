@@ -1,4 +1,20 @@
 """Create full selected-panel state updates for the frozen all-panel transfer rule."""
+
+# Role: reproduction pipeline, pipeline/task1.sh step 2 ("kstar"). k* is the
+# joint density projection of audit_strongest_state_20260922.apply (family
+# joint_aux) with the per-panel alpha frozen in
+# transfer/selection_before_held.json (five panels at alpha .1, the rest 0).
+# For each official state target cell of a selected panel, the density moves
+# to k = (1 - alpha) * q / v + alpha * k_aux, where k_aux is the auxiliary
+# booster's density, and speed and flow are projected onto q = k * v.
+# Inputs: the v3 stack state CSV (CHAMP; in the pipeline a state-only
+# rebuild), the k_aux rows of the two original panels (OLD), the frozen stack
+# and aux boosters and the released masked layer. For the other panels the
+# stack features are rebuilt per split and day, and 64 sampled cells per day
+# check that the stack reproduces the CSV values.
+# Output: transfer/serving/stateupdates.parquet (submission_id, panel, old and
+# new speed_kmh / flow_vph, aux_density_vpkm, alpha) and manifest.json.
+
 from pathlib import Path
 import importlib.util,json,hashlib,sys,time
 import numpy as np
@@ -9,8 +25,12 @@ from threadpoolctl import threadpool_limits
 
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 from src.tfb import release as R,grid,baselines as B,physics,score1,predict1 as P1,task1stack as TS
+# S: audit_strongest_state_20260922 (apply; S.H = audit_holdout20_state for AUX_PATH).
 sp=importlib.util.spec_from_file_location("joint",ROOT/"scripts/audit_strongest_state_20260922.py")
 S=importlib.util.module_from_spec(sp);sp.loader.exec_module(S)
+# SEL: the frozen transfer selection (panel -> alpha, cost weights). CHAMP: the
+# v3 stack submission CSV. OLD: k_aux rows of the two original panels (FIRST),
+# written by build_density_serving_updates.py.
 BASE=ROOT/"build/strongest_candidate_20260922/state/transfer"
 OUT=BASE/"serving";SEL=BASE/"selection_before_held.json"
 CHAMP=ROOT/"build/onset_condition_candidate_20260922/submission_onset_endpoint_top1.csv"
@@ -20,6 +40,7 @@ threadpool_limits(limits=3)
 
 
 def sha(p):
+ """Returns the SHA-256 hex digest of a file, read in 8 MiB blocks."""
  h=hashlib.sha256()
  with open(p,"rb") as f:
   for b in iter(lambda:f.read(8*1024*1024),b""):h.update(b)
@@ -27,6 +48,19 @@ def sha(p):
 
 
 def correct(z,khat,actual,choice):
+ """Applies the k* projection to the target cells `z` of one panel.
+
+ Args:
+     z: key rows of one panel (submission_id, panel, station_id, link_id).
+     khat: auxiliary density per row (veh/km).
+     actual: champion state indexed by submission_id (speed_kmh, flow_vph).
+     choice: the frozen selection (panel_alphas, weights).
+
+ Returns:
+     (updates, checks): old and new speed and flow per submission_id with
+     k_aux and alpha; counts of capped or floored cells and the largest
+     |q / v - target density| over cells where no bound applies.
+ """
  panel=str(z.panel.iloc[0]);alpha=choice["panel_alphas"][panel]
  old=actual.reindex(z.submission_id);assert old.notna().all().all()
  v,q=old.speed_kmh.to_numpy(),old.flow_vph.to_numpy()
@@ -44,6 +78,7 @@ def correct(z,khat,actual,choice):
 
 
 def fallback_sample(raw,field,g,hist,rr,cc):
+ """Applies the production fallback chain and bounds to sampled cells (rows rr, columns cc) of one field."""
  floor=P1.SPEED_FLOOR if field=="speed_kmh" else P1.FLOW_FLOOR
  h=hist.get((field,pd.Timestamp(g.times[0]).weekday()));z=raw.copy();bad=~np.isfinite(z)|(z<floor)
  if h is not None:z=np.where(bad&np.isfinite(h[rr,cc]),h[rr,cc],z)
@@ -54,24 +89,32 @@ def fallback_sample(raw,field,g,hist,rr,cc):
 
 
 def main():
+ """Builds stateupdates.parquet for every selected panel and both scored splits."""
  import lightgbm as lgb
  start=time.time();OUT.mkdir(parents=True,exist_ok=True);chunks=OUT/"keys";chunks.mkdir(exist_ok=True)
+ # Active panels have alpha > 0; `new` are those outside FIRST, rebuilt here.
  choice=json.loads(SEL.read_text());active=[p for p,a in choice["panel_alphas"].items() if a>0];new=[p for p in active if p not in FIRST]
+ # Champion state values (speed_kmh, flow_vph) by submission_id.
  actual=pd.concat([z[z.task=="state"][["submission_id","speed_kmh","flow_vph"]] for z in pd.read_csv(CHAMP,usecols=["submission_id","task","speed_kmh","flow_vph"],chunksize=500000)],ignore_index=True).set_index("submission_id")
  assert actual.index.is_unique
  cols=["submission_id","task","panel","split","timestamp","station_id","link_id","mask_regime"]
+ # Split the official state keys of the new panels into per-panel chunk files.
  for j,z in enumerate(pd.read_csv(R.RELEASE/"submission_key.csv",usecols=cols,chunksize=400000,dtype={c:str for c in cols if c!="submission_id"})):
   z=z[(z.task=="state")&z.panel.isin(new)]
   for p,k in z.groupby("panel",sort=False):k.to_parquet(chunks/f"{p}_{j}.parquet",index=False)
+ # Frozen stack boosters, aux density booster and blend weights.
  ms,mq,fs=TS.load();aux=lgb.Booster(model_file=str(S.H.AUX_PATH));W=P1.load_weights()
  receipts=[];parity=[];cached=pd.read_parquet(OLD);paths=[]
  for panel in active:
   rows=[];checks=[]
+  # FIRST panels: reuse the cached k_aux rows after checking their old values against the champion.
   if panel in FIRST:
    z=cached[cached.panel==panel];got=actual.reindex(z.submission_id)
    assert np.array_equal(got.speed_kmh.to_numpy(),z.speed_kmh.to_numpy()) and np.array_equal(got.flow_vph.to_numpy(),z.old_flow_vph.to_numpy())
    o,c=correct(z,z.aux_density_vpkm.to_numpy(),actual,choice);rows.append(o);checks.append(c)
   else:
+   # Other panels: per split and day, rebuild the stack features at the official
+   # target cells and predict k_aux.
    key=pd.concat([pd.read_parquet(p) for p in sorted(chunks.glob(f"{panel}_*.parquet")) if not p.name.startswith("._")],ignore_index=True)
    assert key.submission_id.is_unique;key["date"]=key.timestamp.str[:10]
    hist=P1.historical_mean(panel,P1.dev_train_files(panel))
@@ -101,6 +144,7 @@ def main():
   d=pd.concat(rows,ignore_index=True);assert d.submission_id.is_unique
   p=OUT/f"updates_{panel}.parquet";d.to_parquet(p,index=False);paths.append(p)
   receipts.append(dict(panel=panel,alpha=choice["panel_alphas"][panel],rows=len(d),v_cap=sum(c["v_cap"] for c in checks),v_floor=sum(c["v_floor"] for c in checks),q_floor=sum(c["q_floor"] for c in checks),max_density_ratio_error=max(c["density_ratio_error"] for c in checks)))
+ # Concatenate the per-panel update files into stateupdates.parquet.
  writer=None;ids=[]
  for p in paths:
   t=pq.read_table(p);ids.append(t.column("submission_id").to_numpy())

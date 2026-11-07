@@ -15,11 +15,29 @@ import pandas as pd
 
 from . import grid, release as R, score2, task2long as TL, task2feat as TF
 
+# Role: runs in the reproduction pipeline. pipeline/onset_head_serve.py and the
+# ongoing serving feature builders call features_for_split with oblique=True,
+# dispersion=True, clock=True, origin_obs=True and the model's own
+# prior_dates; directed and long stay False.
+# Time rule: per window it reads the released 12-stamp history (T-60..T-5),
+# ramp flows at T-5 and, with origin_obs, the masked-layer cells and ramp
+# flows at T itself. The queue prior is built from train-split truth days
+# only; scored days never enter it.
+# PRIOR_DIR: on-disk cache of queue_prior arrays. CALIB_FROM: first date after
+# the 153-day train fold (2030-06-01..2030-10-31).
 PRIOR_DIR = R.REPO / "data" / "interim" / "m13_task2_dataset" / "priors"
 CALIB_FROM = "2030-11-01"        # scripts/50's split boundary; train fold ends here
 
 
 def _day_arrays(panel: str, path, cut: dict[str, float]):
+    """Reads one truth day as (links, Q, E) for the queue prior.
+
+    Returns:
+        links: Link ids sorted by milepost.
+        Q: (n_links x n_stamps) bool, eligible cells with speed <= v_cut
+            (63 km/h when ``cut`` lacks the link).
+        E: (n_links x n_stamps) bool score-eligibility mask.
+    """
     f = pd.read_parquet(path, columns=["timestamp", "link_id", "milepost", "speed_kmh",
                                        "is_score_eligible"])
     f["link_id"] = f.link_id.astype(str)
@@ -48,6 +66,8 @@ def train_fold_dates() -> set[str]:
 
 def _stamp_at(times, T):
     """The ramp row key for T, matching however this split writes timestamps."""
+    # Returns T as an ISO-8601 UTC string ("YYYY-MM-DDTHH:MM:SSZ"); `times` is
+    # accepted for the signature and not used.
     s1 = pd.Timestamp(T).strftime("%Y-%m-%dT%H:%M:%SZ")
     return s1
 
@@ -67,6 +87,15 @@ def queue_prior(panel: str, prior_end: str | None = None,
     A calib or eval date subtracts nothing, exactly as scripts/50 does for a
     non-train day, so one array per panel serves every scored split.
     """
+    # Source days, in priority order: exactly `prior_dates` when given (the
+    # serving pipeline passes the model's manifest dates), else every train
+    # day up to `prior_end`, else the 153-day train fold. Only train-split
+    # truth files are read.
+    # Returns (links in milepost order, (n_links x 288) array of queued /
+    # eligible counts per time-of-day slot, with the panel-wide rate where a
+    # cell has fewer than 5 eligible observations).
+    # Raises RuntimeError when `prior_dates` names a date without a train
+    # truth file.
     PRIOR_DIR.mkdir(parents=True, exist_ok=True)
     # the filename carries the definition: the old dev-wide cache must not be
     # picked up silently by the corrected path, and an extended-date prior must
@@ -141,6 +170,16 @@ def features_for_split(panel: str, split: str, oblique: bool = False,
     reach the same task2feat entry points, which is what keeps the two
     codepaths from drifting; scripts/67 is what proves they did not.
     """
+    # Args: `split` is "validation" or "private"; the windows come from
+    # task2/<panel>/<split>/window_index.csv. `long` adds the task2long block,
+    # `directed` uses task2dir's travel sign, `prior_end` / `prior_dates`
+    # choose the prior's source days (see queue_prior), `clock` adds
+    # time-of-day columns and `origin_obs` adds the task2origin block of
+    # observations at T.
+    # Returns one row per (window, link, step) with the features, window_id,
+    # panel, condition and the horizon timestamp of the step
+    # (forecast_start + 5 min x (step - 1)); an empty frame when the panel has
+    # no window in this split.
     from . import task2dir as TD
     sgn = TD.sign(panel) if directed else 1
     idx = score2.window_index(split)
@@ -175,6 +214,8 @@ def features_for_split(panel: str, split: str, oblique: bool = False,
         h = hist[hist.window_id == w.window_id]
         if h.empty:
             continue
+        # Link order: the window's links sorted by the milepost of the first
+        # train truth day.
         order = truth_mp[truth_mp.link_id.isin(set(h.link_id))].sort_values("milepost").reset_index(drop=True)
         links = list(order.link_id)
         mp = order.milepost.to_numpy(dtype=float)
@@ -182,16 +223,19 @@ def features_for_split(panel: str, split: str, oblique: bool = False,
         times = np.sort(h.timestamp.unique())
         ti = {k: i for i, k in enumerate(times)}
         r = h.link_id.map(li).to_numpy(); c = h.timestamp.map(ti).to_numpy()
+        # History rows of links without a milepost are dropped.
         ok = ~pd.isna(r)
         r = r[ok].astype(int); c = c[ok].astype(int)
         n = (len(links), len(times))
         def lay(col):
+            """Returns history column ``col`` as a (link x stamp) array."""
             g = np.full(n, np.nan)
             g[r, c] = pd.to_numeric(h[col], errors="coerce").to_numpy()[ok]
             return g
         V, Qf, O = lay("speed_kmh"), lay("flow_vph"), lay("occupancy")
         E = np.zeros(n, bool); E[r, c] = h.is_score_eligible.astype(bool).to_numpy()[ok]
         static = TF.static_table(panel, links, grid, R)
+        # T: the window's forecast origin in UTC.
         T = pd.Timestamp(w.forigin if hasattr(w, "forigin") else w.forecast_origin, tz="UTC")
         # Ramp flow is read at the LAST RELEASED HISTORY STAMP, not at
         # forecast_origin. scripts/50 trains on times[t-1]; forecast_origin is
@@ -218,6 +262,11 @@ def features_for_split(panel: str, split: str, oblique: bool = False,
             vc = static["v_cut"].to_numpy(dtype=float)
             rnow = ramp[ramp.timestamp == _stamp_at(times, T)]
             def _rv(fr_):
+                """Sums ramp flows per ramp's nearest mainline link.
+
+                On- and off-ramps are added alike; NaN where no attached ramp
+                has a reading.
+                """
                 v = np.full(len(links), np.nan)
                 idx = {k: i for i, k in enumerate(links)}
                 amap = attach[["ramp_link_id", "nearest_mainline_link_id"]]
@@ -236,10 +285,15 @@ def features_for_split(panel: str, split: str, oblique: bool = False,
                                 list(times) + [T], len(times),
                                 vc, V[:, -1], Qf[:, -1], O[:, -1],
                                 _rv(rnow), _rv(rf), sgn)
+        # Prior rows in this window's link order; links missing from the prior
+        # get NaN.
         pidx = {k: i for i, k in enumerate(prior_links)}
         rows_p = np.array([pidx.get(k, -1) for k in links])
         pr = np.where(rows_p[:, None] >= 0, prior[np.clip(rows_p, 0, None)], np.nan)
+        # tod: time-of-day slot of T (0..287); step s reads prior column
+        # tod + s, the slot of its horizon stamp.
         tod = T.hour * 12 + T.minute // 5
+        # The whole released history (12 stamps) is the history slice.
         f = TF.build_window_features(V, Qf, O, E, links, mp, static, ramps,
                                      (0, len(times)), pr, tod, 288,
                                      dispersion=dispersion, sgn=sgn, clock=clock,

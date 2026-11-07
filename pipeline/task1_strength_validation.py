@@ -7,17 +7,23 @@ strength.py itself is not run: after this part it scores February with the HMP50
 (build/review_20260924_ctm/g2v2/c0_cache, about 1.8 GB of train-derived caches) and writes a research report.
 Only this parquet is read downstream (gap_structure/c1_transfer.base_preds, used by c4_phead_transfer.py).
 """
+# Reproduction pipeline: step 7 of pipeline/task1.sh (log strength_validation).
 import sys
 from pathlib import Path
 import numpy as np, pandas as pd
 
+# Speed bounds in km/h; the extrapolated speeds below must stay inside them.
 SPEED_FLOOR, SPEED_CAP = 6.0, 120.74999999999999   # serve_lib.SPEED_FLOOR / SPEED_CAP
 here = Path(sys.argv[1]) / 'build/review_20260927_research'
 dest = here / 'strength'
 dest.mkdir(exist_ok=True)
+# Validation hole predictions of full_pool.py (written earlier in step 7): t1 (T1 speed), adaptive
+# (pooled speed) and hm25 (HM25 speed), among other columns.
 d = pd.read_parquet(here / 'full_pool/validation_predictions.parquet')
+# pool50 and hm50 double the step away from the T1 speed: t1 + 2 (adaptive - t1), t1 + 2 (hm25 - t1).
 d['pool50'] = 2 * d.adaptive - d.t1; d['hm50'] = 2 * d.hm25 - d.t1
 assert np.all(d[['pool50', 'hm50']].to_numpy() >= SPEED_FLOOR - 1e-8) and np.all(d[['pool50', 'hm50']].to_numpy() <= SPEED_CAP + 1e-8)
+# The same pool50 written as strength.py's half-and-half blend with 4 adaptive - 3 t1.
 assert np.max(np.abs(d.pool50 - (.5 * d.t1 + .5 * (4 * d.adaptive - 3 * d.t1)))) < 1e-10
 d.to_parquet(dest / 'validation_predictions.parquet', index=False)
 print('wrote', dest / 'validation_predictions.parquet', len(d))

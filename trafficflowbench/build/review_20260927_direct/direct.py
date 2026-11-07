@@ -1,5 +1,25 @@
 """Causal full-production-feature reconstruction and direct frozen-T1 replay."""
+# Task 2 ongoing windows. pipeline/ongoing.sh does not run this file as a
+# program, but the R20 operator imports it: queue_data/public_operator.py and
+# serving_stage/prepare.py use `Context` (window features), `FS`, `guarded`
+# and the lib / release / recency modules it loads. The rest is a research
+# record. "T1" here names the frozen ongoing model being replayed:
+# p_mix = .75 x pN + .25 x pA, where pN averages the six CTM "selrec"
+# boosters (lib.SR6) and pA the six location-free new-world boosters
+# (lib.A_NAMES), decoded by link-group mean >= .5 with the never-empty
+# fallback (`guarded`).
+# The file (1) rebuilds the full serving feature set of a window from the
+# released masked data and checks it against the cached and served tables
+# (`parity`, `official_parity`); (2) builds a dense replay of labelled
+# windows on validation (March) days 1-12 (`build`); (3) tests a same-month
+# online correction: a small LightGBM boosted from logit(p_mix), refit every
+# 6 hours on replay windows whose labels matured in the previous 7 days
+# (`run`). Outputs go next to this file (parity.json, official_parity.json,
+# dense/, <rv>_predictions.parquet, <rv>_results.json, ...).
+# Usage: direct.py parity | official_parity | build | build_balanced |
+#        run [v1|v2] [fixed|balanced] [immediate]
 import os
+# Caps the BLAS/OpenMP thread pools at 3 before numpy and LightGBM load.
 for key in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS'):
     os.environ[key] = '3'
 import sys, json, gc, importlib.util, warnings, time
@@ -20,6 +40,8 @@ sys.path.insert(0, str(CT / 'ruler/feat'))
 import geom as G
 spec = importlib.util.spec_from_file_location('direct_rec', CT / 'rep2/build_recency.py')
 REC = importlib.util.module_from_spec(spec); spec.loader.exec_module(REC)
+# PAN: the 8 Task 2 panels. FS: union of the input features of the twelve
+# boosters. KEY: one row per window, link and horizon step (1..6).
 PAN = list(L.FAM)
 FS = sorted(set().union(*(L.booster(p).feature_name() for p in L.SR6 + [L.AMOD / f'og_{n}.txt' for n in L.A_NAMES])))
 KEY = ['window_id', 'link_id', 'step']
@@ -27,10 +49,27 @@ warnings.filterwarnings('ignore', category=RuntimeWarning)
 warnings.filterwarnings('ignore', category=DeprecationWarning)
 
 def dump(path, obj):
+    """Writes `obj` to `path` as indented JSON."""
     Path(path).write_text(json.dumps(obj, indent=2, default=str) + '\n')
 
 class Context:
+    """Per-panel access to one released month and the window feature builder.
+
+    Attributes:
+      panel: Panel name, e.g. 'D7_I210_W'.
+      split: Released month, 'validation' (March) or 'private' (April).
+      links: Link ids in milepost order (from the panel's first train day).
+      mp: Mileposts of `links`.
+      li: Map from link id to row index.
+      static: Static link table; `v_cut` = 0.6 x free-flow speed.
+      vc: Queue speed threshold per link (km/h); speed <= vc is queued.
+      attach: Ramp attachment map (ramp link -> nearest mainline link).
+      length: Link length (km); 0.3 where missing.
+      bid: Link group id of each link (lib.BID, from my_blocks).
+      ramps: Ramp counts per date, filled on first use.
+    """
     def __init__(self, panel, split='validation'):
+        """Loads link order, static features, ramp attachments and link lengths of `panel`."""
         self.panel, self.split = panel, split
         order = pd.read_parquet(R.truth_files(panel, 'train')[0], columns=['link_id', 'milepost']).drop_duplicates().sort_values('milepost')
         self.links = order.link_id.astype(str).tolist()
@@ -48,6 +87,17 @@ class Context:
         self.ramps = {}
 
     def day(self, date, path=None):
+        """Loads one released masked-layer day as links x 288 arrays.
+
+        Args:
+          date: Day 'YYYY-MM-DD'.
+          path: Parquet file to read instead of the released day file.
+
+        Returns:
+          Dict of arrays (links x 288 five-minute slots): 'speed_kmh',
+          'flow_vph' and 'occupancy' (NaN where masked or missing) and
+          'is_score_eligible' (bool).
+        """
         path = path or REC.day_index(self.panel, self.split)[date]
         d = pd.read_parquet(path); d['link_id'] = d.link_id.astype(str)
         d['_t'] = pd.to_datetime(d.timestamp, utc=True)
@@ -59,6 +109,7 @@ class Context:
         return out
 
     def ramp(self, date):
+        """Returns the ramp counts of `date` as {slot: {ramp_link_id: flow_vph}}, cached per date."""
         if date not in self.ramps:
             d = TB.ramp_day(self.panel, 'synthetic_mainline_' + date.replace('-', '_') + '.parquet', split=self.split).copy()
             d['ramp_link_id'] = d.ramp_link_id.astype(str)
@@ -68,6 +119,29 @@ class Context:
         return self.ramps[date]
 
     def features(self, date, t, day, wid, K=5, selector=None, origin_day=None):
+        """Builds the full serving feature rows of one window.
+
+        Reads only data up to the forecast time: history slots t-12..t-1,
+        the masked layer at t, ramp counts at t and t-1, and the recency
+        features of earlier days of the same split.
+
+        Args:
+          date: Window date 'YYYY-MM-DD'.
+          t: Forecast time T as a 5-minute slot index (0..287).
+          day: Day arrays from `day`; the history is read from these.
+          wid: Window id written to the rows.
+          K: Number of earlier same-split days for the recency features.
+          selector: (prev_rej, n_rej) to use; computed from `day` when None.
+          origin_day: Day arrays for the values at t; defaults to `day`.
+
+        Returns:
+          DataFrame with one row per link and horizon step (1..6): every
+          feature of FS plus window_id, panel, date, timestamp, bid,
+          panel_code and history_observed_fraction.
+
+        Raises:
+          AssertionError: When a feature of FS is missing.
+        """
         # Truncate first. Spatial interpolation sees only the twelve history stamps.
         v,q,o,e = [day[c][:,t-12:t].copy() for c in ['speed_kmh','flow_vph','occupancy','is_score_eligible']]
         od = origin_day if origin_day is not None else day
@@ -75,6 +149,7 @@ class Context:
         ramp = self.ramp(date); prev, now = ramp.get(t-1, {}), ramp.get(t,{})
         rvec = TF.ramp_vectors(self.panel,self.links,self.mp,prev,self.attach,oblique=True,sgn=1)
         def rv(values, kind=None, missing=np.nan):
+            """Sums ramp flows onto their nearest mainline link; `kind` 'on' or 'off' keeps one ramp type."""
             ans = np.full(len(self.links), missing)
             for a in self.attach.itertuples():
                 if kind is not None and (str(a.ramp_type).upper() in ('OR','ON')) != (kind == 'on'): continue
@@ -83,6 +158,8 @@ class Context:
             return ans
         origin = OG.origin_columns(self.links,self.links,vt,qt,ot,self.vc,v[:,-1],q[:,-1],o[:,-1],rv(now),rv(prev),1)
         f = TF.build_window_features(v,q,o,e,self.links,self.mp,self.static,rvec,(0,12),np.zeros((len(self.links),288)),t,288,dispersion=True,sgn=1,clock=True,origin=origin)
+        # On- and off-ramp flow per attached mainline link at t (lag 0) and
+        # t-1 (lag 1); 0 on links without such a ramp.
         for kind in ('on','off'):
             attached = set(self.attach.loc[self.attach.ramp_type.astype(str).str.upper().isin(['OR','ON']) == (kind=='on'),'nearest_mainline_link_id'])
             for lag,vals in [(0,now),(1,prev)]:
@@ -98,6 +175,9 @@ class Context:
         rec=REC.feats_for(self.panel,self.split,date,t,self.links,K)
         for c in ['rec_s','rec_any']: rec[c]=rec[c].astype('float32')
         f=f.merge(rec,on=['link_id','step'],validate='one_to_one')
+        # Selection-screen replay: k = number of the 12 earlier slots at which
+        # the window screen (history at least 70 % observed, a queue at the two
+        # previous slots) would also have opened a window.
         if selector is None:
             V=day['speed_kmh'][:,:t+1]; E=day['is_score_eligible'][:,:t+1]
             qo=(V<=self.vc[:,None])&E&np.isfinite(V)
@@ -116,11 +196,23 @@ class Context:
         return f
 
 def predict(f):
+    """Adds pA (mean of the six location-free boosters), pN (mean of the six CTM boosters) and p_mix = .75 pN + .25 pA."""
     f=f.copy();f['pA']=L.predA(f);f['pN']=L.predN(f)
     f['p_mix']=.75*f.pN+.25*f.pA
     return f
 
 def parity():
+    """Checks the rebuilt features against the cached pseudo-validation table.
+
+    For three windows per panel, rebuilds the features from the day files and
+    compares every FS column and the mixed probability with the cache
+    (lib.load_cache('v2')). It also overwrites every input after t with junk
+    values and requires identical features (no look-ahead). Writes parity.json.
+
+    Raises:
+      AssertionError: When the features change under the junk inputs or the
+        probability differs by 1e-6 or more.
+    """
     ref=L.load_cache('v2'); sels=pd.read_parquet(CT/'f2_analysis/bias/pvsel_v2.parquet').set_index('window_id')
     wi=pd.read_parquet(L.RD['v2']/'windows_validation.parquet').set_index('window_id')
     result=[]
@@ -154,6 +246,21 @@ def parity():
     assert max(r['prob_max'] for r in result)<1e-6
 
 def build(maxday=12, schedule='fixed'):
+    """Builds the dense replay table of labelled windows on validation days.
+
+    For each panel and validation day up to `maxday`, opens a window every
+    6 slots where the history is at least 70 % observed and a queue is
+    visible at the two previous slots. Labels are the observed queue states
+    (speed <= v_cut) of the next 6 slots. `selected` marks windows with some
+    queue ahead whose overlap (IoU) with plain persistence of the queue at t
+    is at most 0.9. Keeps labelled rows only and adds pA, pN and p_mix.
+    Writes dense/<panel>.parquet (dense_balanced/ for 'balanced').
+
+    Args:
+      maxday: Last day of the month used.
+      schedule: 'fixed' (slots 13, 19, ...) or 'balanced' (start phase
+        shifted by day and panel).
+    """
     folder=HERE/('dense' if schedule=='fixed' else 'dense_balanced')
     folder.mkdir(exist_ok=True)
     for panel in PAN:
@@ -186,6 +293,17 @@ def build(maxday=12, schedule='fixed'):
         del parts,d,c;REC.day_q.cache_clear();gc.collect()
 
 def official_parity():
+    """Checks the rebuilt features against the served official validation table.
+
+    For every official queue_ongoing validation window, writes the released
+    window_history into the day arrays, rebuilds the features and compares
+    them and the mixed probability with the served inputs (serve, geometry,
+    selector and recency tables). Writes official_parity.json.
+
+    Raises:
+      AssertionError: When the history reaches slot t or later, or the
+        probability differs by 1e-6 or more.
+    """
     s=pd.read_parquet(CT/'serve/serve_real_validation.parquet')
     s=s[s.condition.eq('queue_ongoing')].merge(pd.read_parquet(CT/'ruler/feat/geom_serve_real_validation.parquet'),on=KEY)
     s=s.merge(pd.read_parquet(CT/'dense/sel2_validation.parquet')[['window_id','prev_rej','n_rej']],on='window_id')
@@ -216,6 +334,19 @@ def official_parity():
     assert max(a['probability_max_abs'] for a in audits)<1e-6
 
 def guarded(z,p):
+    """Decodes probabilities into queue decisions per link group.
+
+    A cell is queued when the mean of `p` over its link group (bid) at the
+    same window and time is at least 0.5. A window with no queued cell takes
+    the same decode of pA instead (never-empty fallback).
+
+    Args:
+      z: Rows with window_id, timestamp, bid and pA.
+      p: Probability per row.
+
+    Returns:
+      Boolean decision per row.
+    """
     d=L.block_mean(z,np.asarray(p))>=.5
     empty=pd.Series(d).groupby(z.window_id.to_numpy()).transform('sum').to_numpy()==0
     return np.where(empty,L.block_mean(z,z.pA)>=.5,d)
@@ -232,11 +363,14 @@ def score_fast(S,z,decision):
     q['inter']=(a&b&mask).astype(int);q['union']=((a|b)&mask).astype(int)
     q['n_true']=(b&mask).astype(int);q['n_pred']=(a&mask).astype(int)
     g=q.groupby('window_id',sort=False)[['inter','union','n_true','n_pred']].sum().reset_index()
+    # A window whose prediction and label are both empty scores IoU 1.
     g['iou']=np.where(g.union>0,g.inter/g.union,1.)
     return g.merge(meta,on='window_id',validate='one_to_one')
 
 def bootstrap(a,b,n=1000,seed=0):
     """Same paired calendar-date resampling as L.boot, without pandas per draw."""
+    # Returns the mean IoU change (b - a) under the official aggregation, its
+    # 95 % date-bootstrap interval and the counts of better and worse windows.
     m=a[['window_id','date','panel','iou']].merge(b[['window_id','iou']],on='window_id',suffixes=('_a','_b'),validate='one_to_one')
     m['d']=m.iou_b-m.iou_a;dates=m.date.unique();panels=sorted(m.panel.unique())
     di=pd.Index(dates).get_indexer(m.date);pi=pd.Index(panels).get_indexer(m.panel)
@@ -251,6 +385,7 @@ def bootstrap(a,b,n=1000,seed=0):
     return dict(delta=L.agg_w(m,'d'),lo=float(lo),hi=float(hi),n=len(m),better=int((m.d>1e-9).sum()),worse=int((m.d<-1e-9).sum()))
 
 def fill_history_fraction(d):
+    """Fills the share of observed speeds in the 12 history slots before each window's origin (in place)."""
     if 'history_observed_fraction' not in d:d['history_observed_fraction']=np.nan
     for panel,ii in d.groupby('panel',sort=False).groups.items():
         if d.loc[ii,'history_observed_fraction'].notna().all():continue
@@ -266,6 +401,7 @@ def fill_history_fraction(d):
     assert d.history_observed_fraction.between(0,1).all()
 
 def paired_selection(d):
+    """Adds `paired_selected`: the `build` selection rule counted only on cells observed both at t and at the horizon step."""
     selected={}
     for panel,s in d.groupby('panel',sort=False):
         c=Context(panel)
@@ -281,6 +417,15 @@ def paired_selection(d):
     d['paired_selected']=d.window_id.map(selected).astype(bool)
 
 def query(rv='v2'):
+    """Loads the pseudo-validation query windows of ruler `rv` (days 1-12).
+
+    Keeps the cached p_mix as `p_canonical`, recomputes the recency features
+    with K=5 and predicts pA, pN and p_mix again. `cutoff` = origin floored
+    to 6 hours, the last refit time before the window.
+
+    Returns:
+      Feature rows of the query windows with predictions, origin and cutoff.
+    """
     z=L.load_cache(rv);z=z[pd.to_datetime(z.date).dt.day<=12].reset_index(drop=True)
     sels=pd.read_parquet(CT/f'f2_analysis/bias/pvsel_{rv}.parquet').set_index('window_id')
     z['prev_rej']=z.window_id.map(sels.prev_rej_srv).astype('float32');z['n_rej']=z.window_id.map(sels.n_rej_srv).astype('float32')
@@ -298,6 +443,21 @@ def query(rv='v2'):
     return z
 
 def run(rv='v2', schedule='fixed', immediate=False):
+    """Fits the same-month online correction and scores it on the query windows.
+
+    For each 6-hour cutoff, an arm's training rows are replay rows whose
+    labels matured (origin + 30 min) within the 7 days before the cutoff;
+    a 60-tree LightGBM boosted from logit(p_mix) gives the arm probability.
+    Arms: 'selected', 'all', 'complete' (selected, fully observed history)
+    and 'paired' (paired_selected). Each case blends 25 % of an arm into
+    p_mix and is scored by window IoU against T1.
+
+    Args:
+      rv: Pseudo-validation ruler version ('v1' or 'v2').
+      schedule: Replay table, 'fixed' or 'balanced'.
+      immediate: When True, the cutoff is the window origin itself and only
+        the 'paired' arm runs.
+    """
     out=HERE if schedule=='fixed' else HERE/'balanced'
     if immediate:out=out/'immediate'
     out.mkdir(exist_ok=True)
@@ -323,6 +483,8 @@ def run(rv='v2', schedule='fixed', immediate=False):
             if arm=='paired':tr&=d.paired_selected
             f=d[tr];nw=f.window_id.nunique()
             if nw<10:continue
+            # Time order: every training label precedes the cutoff, and the
+            # cutoff precedes every query origin.
             assert f.timestamp.max()<=cutoff and cutoff<=z.loc[ii,'origin'].min()
             weights=1/f.groupby('window_id').window_id.transform('size').to_numpy();weights/=weights.mean()
             modeldir=out/'models'/arm;modeldir.mkdir(parents=True,exist_ok=True)
@@ -336,6 +498,7 @@ def run(rv='v2', schedule='fixed', immediate=False):
             audit.append(dict(arm=arm,cutoff=str(cutoff),max_label=str(f.timestamp.max()),nwin=int(nw),nrows=len(f)))
             print('fit',rv,arm,str(cutoff),nw,len(f),flush=True)
             del model,f;gc.collect()
+    # Scoring leaves out one pseudo window (PV_D7_I405_N_2031-03-28_273).
     S=L.score_mod(rv);pws={};valid=set(z.window_id)-{'PV_D7_I405_N_2031-03-28_273'};result={}
     z.to_parquet(out/f'{rv}_predictions.parquet',index=False)
     cases={'T1_canonical':z.p_canonical,'T1_K5':z.p_mix}
@@ -347,6 +510,7 @@ def run(rv='v2', schedule='fixed', immediate=False):
         result[name]={'score':L.agg_w(pw,'iou'),'vs_canonical':bootstrap(pws['T1_canonical'],pw)}
         if 'T1_K5' in pws:result[name]['vs_K5']=bootstrap(pws['T1_K5'],pw)
         print(name,json.dumps(result[name]),flush=True)
+    # The T1 replay must reproduce the earlier matched per-window IoU exactly.
     ref=pd.read_parquet(ROOT/f'build/review_20260927/serving_matched/{rv}_T1_perwin.parquet')
     chk=pws['T1_canonical'][['window_id','iou']].merge(ref[['window_id','iou']],on='window_id')
     assert np.max(np.abs(chk.iou_x-chk.iou_y))==0

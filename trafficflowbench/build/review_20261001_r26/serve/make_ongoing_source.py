@@ -4,6 +4,7 @@ Reads decisions_BNDT45_{validation,private}.npz (r26_serve_t45.py decide) and wr
 <run root>/final_sources/ongoing.parquet: submission_id (int64), queue_pred (int8) = 'delta', validation rows
 then private rows in SUBMISSION_MAP order. pipeline/assemble.py places these into the submission.
 """
+# Runs in pipeline/ongoing.sh as the last step ("final_source").
 import numpy as np, pandas as pd
 from pathlib import Path
 HERE = Path(__file__).resolve().parent

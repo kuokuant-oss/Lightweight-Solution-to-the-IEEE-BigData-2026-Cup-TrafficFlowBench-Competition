@@ -9,6 +9,10 @@ The frozen member models are read from models/og_{name}.txt (where they were arc
 
   ogens_serve.py [tags...]      default: realval realpriv
 """
+# Runs in the reproduction as `pipeline/ongoing.sh` step `ogens`. A25 is the
+# location-free ongoing ensemble (A), which enters the final mix with weight
+# 0.25; its probabilities also give the empty-window fallback
+# (review_20260925/make_never_empty_fallback.py).
 import os
 for n in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS'): os.environ[n] = '2'
 import sys
@@ -16,11 +20,24 @@ from pathlib import Path
 import numpy as np, pandas as pd, lightgbm as lgb
 HERE = Path(__file__).resolve().parent; sys.path.insert(0, str(HERE))
 import og_ens as E  # noqa: E402  (member list and feature lists; its main() is not called)
+# og_ens.py and og_exp.py change these variables at import (to 8, then 6);
+# set them back to 2.
 for n in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS'): os.environ[n] = '2'
 Q = E.Q
 
 
 def serve(tag):
+    """Writes the A-ensemble probabilities of the official ongoing rows of a split.
+
+    Args:
+      tag: 'realval' (validation) or 'realpriv' (private); selects
+        serve_<tag>.parquet and geom_serve_<tag>.parquet and names the output
+        ogens_<tag>_prob.parquet.
+
+    Raises:
+      AssertionError: when the output exists already or a member model's
+        feature names differ from its MEMBERS list.
+    """
     out = HERE / f'ogens_{tag}_prob.parquet'
     assert not out.exists(), out
     # identical to og_ens.main(): ongoing rows of the serve table, geometry merged by (window, link, step)
