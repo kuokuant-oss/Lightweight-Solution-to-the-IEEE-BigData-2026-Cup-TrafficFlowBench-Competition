@@ -43,9 +43,9 @@ def git(repo, *args):
 
 
 def code_files(repo):
-    """Lists tracked Python and shell files (symbolic links excluded)."""
+    """Lists Python and shell files of the base revision (links excluded)."""
     out = []
-    for f in git(repo, "ls-files", "-z").decode().split("\0"):
+    for f in git(repo, "ls-tree", "-r", "-z", "--name-only", BASE).decode().split("\0"):
         if not f or os.path.islink(os.path.join(repo, f)):
             continue
         if f.endswith((".py", ".sh")) or f == "bin/tfb-run":
@@ -56,7 +56,7 @@ def code_files(repo):
 def pinned_files(repo, files):
     """Returns files whose committed SHA256 appears in another tracked file."""
     texts = []
-    for f in git(repo, "ls-files", "-z").decode().split("\0"):
+    for f in git(repo, "ls-tree", "-r", "-z", "--name-only", BASE).decode().split("\0"):
         p = os.path.join(repo, f)
         if (f and f != "checksums.txt" and not os.path.islink(p)
                 and f.endswith((".json", ".py", ".txt", ".csv", ".md"))
