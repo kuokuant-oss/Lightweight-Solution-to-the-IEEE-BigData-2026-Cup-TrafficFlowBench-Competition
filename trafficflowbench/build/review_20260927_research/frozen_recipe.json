@@ -1,0 +1,24 @@
+{
+  "created_utc": "2026-09-27T00:01:27.205192+00:00",
+  "name": "HM-Pool50",
+  "parent": "HM25",
+  "parent_sha256": "5f00098ed72acb6f7983c267b97071b8510465adf9667325fe3bce0d3b4309cf",
+  "task": "offline Task 1 hole speed",
+  "mixture_weight": 0.5,
+  "conditional_models": "unchanged HM25 three heads and original T1 residual head",
+  "probability_pooling": "uniform mean over all score-eligible links in same learned cluster at same window and step",
+  "cluster_distance": "1 - queue Jaccard on simultaneously observed cells; union count >= 20; complete linkage distance <= 0.05; inactive unsupported links singleton",
+  "fit_domains": "same split released speed; heldout odd/even fits only other half; official fit all released days",
+  "selection_world": "March strict entire-day holdout + February official-like holes joint state/physics",
+  "confirmation_world": "April released pseudo holes only; no hidden truth",
+  "candidate_formula": "0.5 * shipped T1 speed + 0.5 * clip(shipped G2 speed + (1-p_pool)*free_residual + p_pool*queue_residual)",
+  "source_sha256_before_april": {
+    "build/review_20260927_research/common.py": "55837e05862ff64bdf526e7efd88d4b9695199d49fce3acb6016d581c669d408",
+    "build/review_20260927_research/structure.py": "cb7a40d0577d9047f2d00205f459232be96103ee2876c119c3642b6c7d52c59b",
+    "build/review_20260927_research/full_pool.py": "e704a6eb64efe6d6881e8ede6f34c4cb2a0fb006261e037aa3e915d8c4ce072c",
+    "build/review_20260927_research/feb_pool.py": "895df7ef0c376408c4411bb1c847d5081c37c63075537caf044cf787fcba7faa",
+    "build/review_20260927_research/strength.py": "44eb348fdc3aa2e8fda4971f85a94d0244741853dab7eca28e628548fdc23932"
+  },
+  "selection_results_sha256": "7bcd8ae256f1699e1fe71aaf534f508dc1196e7e79c73bb9a12d8ce2b7c8a976",
+  "do_not_tune_on_confirmation": true
+}

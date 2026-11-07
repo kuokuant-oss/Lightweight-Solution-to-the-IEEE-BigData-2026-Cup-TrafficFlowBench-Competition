@@ -1,0 +1,140 @@
+{
+  "selected_at_utc": "2026-09-22T08:35:59.094665+00:00",
+  "selected_recipe": "panel_shrink25",
+  "model_protocol_sha256": "d739bb8e5e1412f3ac0332cb90fda831a47cc01f91ccfa5b23c9e7a11baf07a4",
+  "decoder_addendum_sha256": "dc659f9845079b73224dc8a4a8225f0e25821158c416142b9b53886009a91724",
+  "summary": [
+    {
+      "recipe": "reference127",
+      "mean_S_onset": 0.8761635569342303,
+      "mean_delta": 0.0,
+      "positive_folds": 0,
+      "worst_fold_delta": 0.0,
+      "eligible": false,
+      "fold_deltas": {
+        "oct": 0.0,
+        "nov": 0.0,
+        "dec": 0.0
+      }
+    },
+    {
+      "recipe": "capacity31",
+      "mean_S_onset": 0.8683157334669064,
+      "mean_delta": -0.007847823467323786,
+      "positive_folds": 1,
+      "worst_fold_delta": -0.015384005777913434,
+      "eligible": false,
+      "fold_deltas": {
+        "oct": 0.000225751499270066,
+        "nov": -0.008385216123327988,
+        "dec": -0.015384005777913434
+      }
+    },
+    {
+      "recipe": "capacity63",
+      "mean_S_onset": 0.8678131267956454,
+      "mean_delta": -0.008350430138584905,
+      "positive_folds": 0,
+      "worst_fold_delta": -0.013135359233048316,
+      "eligible": false,
+      "fold_deltas": {
+        "oct": -0.003993985026958802,
+        "nov": -0.007921946155747595,
+        "dec": -0.013135359233048316
+      }
+    },
+    {
+      "recipe": "no_unconditional_prior",
+      "mean_S_onset": 0.8549385274266031,
+      "mean_delta": -0.02122502950762702,
+      "positive_folds": 0,
+      "worst_fold_delta": -0.025351792135600126,
+      "eligible": false,
+      "fold_deltas": {
+        "oct": -0.025351792135600126,
+        "nov": -0.02237150988402381,
+        "dec": -0.015951786503257126
+      }
+    },
+    {
+      "recipe": "no_absolute_clock",
+      "mean_S_onset": 0.8644052404635914,
+      "mean_delta": -0.011758316470638927,
+      "positive_folds": 1,
+      "worst_fold_delta": -0.023992397883527028,
+      "eligible": false,
+      "fold_deltas": {
+        "oct": -0.017220469041937414,
+        "nov": -0.023992397883527028,
+        "dec": 0.005937917513547664
+      }
+    },
+    {
+      "recipe": "legacy_blend25",
+      "mean_S_onset": 0.8745844714035783,
+      "mean_delta": -0.0015790855306520764,
+      "positive_folds": 1,
+      "worst_fold_delta": -0.0069301809685773375,
+      "eligible": false,
+      "fold_deltas": {
+        "oct": -0.0069301809685773375,
+        "nov": -0.00022482943819146506,
+        "dec": 0.0024177538148125732
+      }
+    },
+    {
+      "recipe": "reference63_ensemble50",
+      "mean_S_onset": 0.8723314525013693,
+      "mean_delta": -0.003832104432860861,
+      "positive_folds": 0,
+      "worst_fold_delta": -0.006441153241765085,
+      "eligible": false,
+      "fold_deltas": {
+        "oct": -0.0013841407555460483,
+        "nov": -0.006441153241765085,
+        "dec": -0.00367101930127145
+      }
+    },
+    {
+      "recipe": "panel_shrink25",
+      "mean_S_onset": 0.8768826872276166,
+      "mean_delta": 0.0007191302933862905,
+      "positive_folds": 3,
+      "worst_fold_delta": 0.0003496809161640524,
+      "eligible": true,
+      "fold_deltas": {
+        "oct": 0.0003496809161640524,
+        "nov": 0.00100413853542336,
+        "dec": 0.000803571428571459
+      }
+    },
+    {
+      "recipe": "panel_shrink50",
+      "mean_S_onset": 0.8749359907761803,
+      "mean_delta": -0.0012275661580499753,
+      "positive_folds": 1,
+      "worst_fold_delta": -0.003632384772090713,
+      "eligible": false,
+      "fold_deltas": {
+        "oct": 0.0006415947710644021,
+        "nov": -0.0006919084731236147,
+        "dec": -0.003632384772090713
+      }
+    },
+    {
+      "recipe": "expected_jaccard",
+      "mean_S_onset": 0.873206967864832,
+      "mean_delta": -0.0029565890693982557,
+      "positive_folds": 0,
+      "worst_fold_delta": -0.005126354141350431,
+      "eligible": false,
+      "fold_deltas": {
+        "oct": -0.005126354141350431,
+        "nov": -0.0013427690485532384,
+        "dec": -0.002400644018291098
+      }
+    }
+  ],
+  "only_first218_development_dates_used_for_new_selection": true,
+  "held_before_this_selection": "Previously seen in earlier research; none used in this new recipe-selection computation"
+}

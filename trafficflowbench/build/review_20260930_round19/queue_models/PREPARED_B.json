@@ -1,0 +1,239 @@
+{
+  "status": "B_DATA_READY_NO_FITS",
+  "replacement": "geom3 only; original selrec3+A25+guarded block decoder unchanged",
+  "rows": 2582803,
+  "windows": 3013,
+  "features": [
+    "speed_origin",
+    "flow_origin",
+    "occ_origin",
+    "margin_origin",
+    "min_speed_hist",
+    "mean_speed_hist",
+    "min_margin_hist",
+    "trend_speed_3",
+    "trend_speed_6",
+    "trend_occ_3",
+    "trend_flow_3",
+    "is_queued_origin",
+    "n_queued_hist",
+    "eligible_rate_hist",
+    "milepost",
+    "lanes",
+    "free_speed",
+    "capacity",
+    "length_km",
+    "v_cut",
+    "onramp_flow",
+    "offramp_flow",
+    "onramp_flow_upstream",
+    "dist_to_onramp_km",
+    "onramp_flow_upstream_oblique",
+    "margin_up_1",
+    "margin_dn_1",
+    "trend_up_1",
+    "margin_up_2",
+    "margin_dn_2",
+    "trend_up_2",
+    "margin_up_4",
+    "margin_dn_4",
+    "trend_up_4",
+    "queued_up_1",
+    "queued_dn_1",
+    "sd_speed_hist",
+    "cv_speed_hist",
+    "sd_occ_hist",
+    "cv_occ_hist",
+    "cv_flow_hist",
+    "cv_speed_dn_1",
+    "occ_mean_up_1",
+    "cv_speed_up_1",
+    "origin_obs_mask",
+    "origin_speed_T",
+    "origin_flow_T",
+    "origin_occ_T",
+    "origin_margin_T",
+    "origin_queued_T",
+    "origin_dspeed",
+    "origin_dflow",
+    "origin_docc",
+    "origin_margin_T_up1",
+    "origin_margin_T_dn1",
+    "origin_obs_frac_corridor",
+    "origin_queued_frac_corridor",
+    "origin_ramp_T",
+    "origin_ramp_mask_T",
+    "origin_dramp",
+    "n_queued_corridor",
+    "mainline_flow_corridor",
+    "step_min",
+    "tod_min",
+    "tod_sin",
+    "tod_cos",
+    "origin_tod_min",
+    "margin_shock",
+    "queued_shock",
+    "origin_on_ramp_T",
+    "origin_off_ramp_T",
+    "origin_net_ramp_T",
+    "origin_dnet_ramp",
+    "g_gap_km",
+    "g_gap_links",
+    "g_tail_vel",
+    "g_rh_w",
+    "g_eta_rh",
+    "g_eta_vel",
+    "g_block_len_km",
+    "g_block_links",
+    "g_head_age",
+    "g_in_block",
+    "g_pos_in_block_km",
+    "g_clear_eta_rh",
+    "g_n_blocks",
+    "g_link_age",
+    "g_q_up",
+    "g_q_in",
+    "g_tail_age",
+    "g_eta_rh_m_step",
+    "g_eta_vel_m_step",
+    "g_clear_m_step",
+    "prev_rej",
+    "n_rej",
+    "rec_s",
+    "rec_any",
+    "rec_n"
+  ],
+  "feature_dtype": "float32",
+  "weight_dtype": "float64",
+  "dropout_windows": 765,
+  "selector_dropout_order_sha": "8519e186b73e5ffef4937367c3fc62656f85b558f75a2ce13e6832ca9285aa85",
+  "all_rows_base_values_exact": true,
+  "all_weights_exact": true,
+  "source_files": [
+    {
+      "panel": "D12_I5_N",
+      "rows": 492578,
+      "path": "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_next/ongoing_lags/cache/D12_I5_N_base.npy",
+      "sha256": "86d74a9075046da9843eec49d6076981d35c4e4e80a82e256b6ecd0d943526de",
+      "original_key_sha": "97d95163ce08a5ebd08170d2fd00b53ef843ef96c5e42ad7bd07dff00f58e55f"
+    },
+    {
+      "panel": "D12_I5_S",
+      "rows": 196000,
+      "path": "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_next/ongoing_lags/cache/D12_I5_S_base.npy",
+      "sha256": "025bdab259c377da322eef4772320a3d35bfd5760295e8e1b76251c6a7027895",
+      "original_key_sha": "7c7f6546edef65279517b1004200917c60676a9c5b7629d93e0370f6ff27e461"
+    },
+    {
+      "panel": "D7_I10_E",
+      "rows": 274665,
+      "path": "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_next/ongoing_lags/cache/D7_I10_E_base.npy",
+      "sha256": "fca7b740f7185b722aa996380a91e8181179f676ef5a4f1dbe98c496c7387288",
+      "original_key_sha": "d84e9d716442f1d76e89d7395886a8a59cfa770dc93adc0dbe799e21dd884f12"
+    },
+    {
+      "panel": "D7_I10_W",
+      "rows": 64257,
+      "path": "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_next/ongoing_lags/cache/D7_I10_W_base.npy",
+      "sha256": "740d4b80c84f13128550a90ed7e97cb13615f5656246fcaf7d964e85cdd72d85",
+      "original_key_sha": "5b754ed5b70c86037d0bc338218ac862395682bc083fbbbc4121256fda939d32"
+    },
+    {
+      "panel": "D7_I210_E",
+      "rows": 374252,
+      "path": "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_next/ongoing_lags/cache/D7_I210_E_base.npy",
+      "sha256": "ee44bc4cf7b933a60ffdab6650da13af8290b13bbc29a250c351c1cf121d29bb",
+      "original_key_sha": "72e7c8ec8c956e5b5ae3fa257684926152b9aad599e9a92976595de03ea577d5"
+    },
+    {
+      "panel": "D7_I210_W",
+      "rows": 163320,
+      "path": "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_next/ongoing_lags/cache/D7_I210_W_base.npy",
+      "sha256": "af26dada7161caf55b8eb8b6be9ad57a261e9489b9f44fe452f33945f57dc20d",
+      "original_key_sha": "9fd6396d76f59984f77765c893cf4452be0564f828b0ded946a4a62f09a4dbb7"
+    },
+    {
+      "panel": "D7_I405_N",
+      "rows": 814174,
+      "path": "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_next/ongoing_lags/cache/D7_I405_N_base.npy",
+      "sha256": "c5e9314c8472bf44a5c6e56183d2ba0356043217556d46ec418b65b6da81445b",
+      "original_key_sha": "6495a193dcfb5b139626e709a311b22534f3823be45175a4d06db367ff8df6a6"
+    },
+    {
+      "panel": "D7_I405_S",
+      "rows": 203557,
+      "path": "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_next/ongoing_lags/cache/D7_I405_S_base.npy",
+      "sha256": "5fcce79869daad3c597b57f36059fbf9e41e387e96087a5b404f1d8706e59e25",
+      "original_key_sha": "6e00bb42649eacfc5dd39df15f5f46f6b2cb2162a38fb876a1efc7ace621971c"
+    }
+  ],
+  "source_hashes": {
+    "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_next/ongoing_lags/cache/MANIFEST.json": "28b3231c95701613f83a8f30139d65d79c18e25d931768bf5717420ca8c74475",
+    "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_next/ongoing_lags/cache/global_meta.npz": "c0b0a79915e719f149b4e8549d55ae979ccf3496fe3c387954910c083fc48765",
+    "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_next/seed_control/train_seed.py": "77b4852156a386ef090b430e7c7dbfc158456908f75a680eac9c56f319fafbda",
+    "/Volumes/Crucial X9/trafficflow/trafficflowbench/scripts/strongest_20260922_ongoing.py": "2e064bbf026a5f88709adf6e231f657fb367dcc3f6dfac5f1e65e44d45d9f960"
+  },
+  "X_path": "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_round19/queue_models/cache/X_geom_original.npy",
+  "X_sha256": "417790dd504df8a28fe0a329827407e626e777a86d550e8542cb0131980ac8e7",
+  "meta_path": "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_round19/queue_models/cache/global_meta.npz",
+  "meta_sha256": "c0b0a79915e719f149b4e8549d55ae979ccf3496fe3c387954910c083fc48765",
+  "original_models": {
+    "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260929_target092/contract_audit/q4_refit/m_R_V2selrec_refit_seed0.txt": "bc208a9df5aa32cf18a2ee3fcba2957d7615a507f97f29d3b4f05a195c430a8b",
+    "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260929_target092/contract_audit/q4_refit/m_R_V2selrec_refit_seed1.txt": "a893e81246f93b849715c5a673255e81b389fe53b31d400e7ff71c60e3c9ff6a",
+    "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260929_target092/contract_audit/q4_refit/m_R_V2selrec_refit_seed2.txt": "25557b1c6316fcf592b0af0ac9b94ae5c5bfc80ec1ed895892445aba0d7651bd",
+    "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260929_target092/contract_audit/q4_refit/m_R_V2geomselrec_refit_seed0.txt": "802e3dfd0397d71aadfb08afd03c8d2a8e46acbc939a0ab9bb3580c3a19b602c",
+    "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260929_target092/contract_audit/q4_refit/m_R_V2geomselrec_refit_seed1.txt": "d436e2db3343ea310021292e14863ec973bacfdba6a84593600ed6bfdeb79ab8",
+    "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260929_target092/contract_audit/q4_refit/m_R_V2geomselrec_refit_seed2.txt": "aba1ee63c3f815d5ccd0f97345a6dd9d8214bc123b417da76ad5b6243e705986"
+  },
+  "rounds": {
+    "0": 554,
+    "1": 577,
+    "2": 681
+  },
+  "fit_order": [
+    [
+      "A127_100",
+      0
+    ],
+    [
+      "B15_100",
+      0
+    ],
+    [
+      "B15_100",
+      1
+    ],
+    [
+      "B15_100",
+      2
+    ],
+    [
+      "B15_1000",
+      0
+    ],
+    [
+      "B15_1000",
+      1
+    ],
+    [
+      "B15_1000",
+      2
+    ],
+    [
+      "B127_1000",
+      0
+    ],
+    [
+      "B127_1000",
+      1
+    ],
+    [
+      "B127_1000",
+      2
+    ]
+  ],
+  "new_fits": 10,
+  "threads": 2,
+  "seconds": 14.252559185028076,
+  "peak_RSS_GB": 1.548091392
+}

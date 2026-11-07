@@ -1,0 +1,8 @@
+# macOS and exFAT clutter
+._*
+.DS_Store
+# Python caches
+__pycache__/
+*.pyc
+# run outputs, when --out points inside the repo
+/out/

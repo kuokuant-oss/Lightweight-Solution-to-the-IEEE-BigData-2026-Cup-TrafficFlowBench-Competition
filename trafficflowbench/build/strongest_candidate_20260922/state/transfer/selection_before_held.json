@@ -1,0 +1,94 @@
+{
+  "rule": "consensus_joint_0.1",
+  "panel_alphas": {
+    "D7_I10_E": 0.1,
+    "D7_I10_W": 0.0,
+    "D7_I210_E": 0.0,
+    "D7_I210_W": 0.0,
+    "D7_I405_N": 0.1,
+    "D7_I405_S": 0.1,
+    "D12_I5_N": 0.1,
+    "D12_I5_S": 0.1,
+    "D12_I405_N": 0.0,
+    "D12_I405_S": 0.0
+  },
+  "calibration": {
+    "S_FD": 0.9876118768911393,
+    "S_LWR": 0.6275925850150001,
+    "S_physics": 0.7475990156403798,
+    "S_state": 0.9462309774151778,
+    "weighted_state_physics": 0.4433206944413692,
+    "target_rows": 1706666,
+    "eligible_rows": 5225390,
+    "transitions": 3623816,
+    "panels": 10,
+    "panel_regimes": 30,
+    "rmse_speed": 1.5157348156221178,
+    "rmse_flow_lane": 30.574536173282183,
+    "rule": "consensus_joint_0.1",
+    "active_panels": 5
+  },
+  "weights": {
+    "D7_I10_E": {
+      "rmse_speed": 1.3611443702611545,
+      "rmse_flow_lane": 30.85725625792557,
+      "speed_precision": 0.015868999991423202,
+      "flow_lane_precision": 2.484558770418064e-05
+    },
+    "D7_I10_W": {
+      "rmse_speed": 1.32386444283072,
+      "rmse_flow_lane": 25.667226904191363,
+      "speed_precision": 0.01631586988907591,
+      "flow_lane_precision": 2.9869477896011933e-05
+    },
+    "D7_I210_E": {
+      "rmse_speed": 1.5330347528234347,
+      "rmse_flow_lane": 30.86502122915123,
+      "speed_precision": 0.014089700158602832,
+      "flow_lane_precision": 2.4839337092130997e-05
+    },
+    "D7_I210_W": {
+      "rmse_speed": 2.1521490842103095,
+      "rmse_flow_lane": 31.310855584716382,
+      "speed_precision": 0.010036479423508764,
+      "flow_lane_precision": 2.4485650498828787e-05
+    },
+    "D7_I405_N": {
+      "rmse_speed": 1.6966552152891043,
+      "rmse_flow_lane": 37.40314541697748,
+      "speed_precision": 0.012730930719073311,
+      "flow_lane_precision": 2.049738486214779e-05
+    },
+    "D7_I405_S": {
+      "rmse_speed": 1.7405276041944417,
+      "rmse_flow_lane": 30.962314838780554,
+      "speed_precision": 0.012410030124168586,
+      "flow_lane_precision": 2.476128385938413e-05
+    },
+    "D12_I5_N": {
+      "rmse_speed": 1.192708610555389,
+      "rmse_flow_lane": 24.963506200176127,
+      "speed_precision": 0.018110039458792776,
+      "flow_lane_precision": 3.0711497836840624e-05
+    },
+    "D12_I5_S": {
+      "rmse_speed": 1.3910947729261272,
+      "rmse_flow_lane": 26.569355887555208,
+      "speed_precision": 0.015527338913483969,
+      "flow_lane_precision": 2.8855297430291294e-05
+    },
+    "D12_I405_N": {
+      "rmse_speed": 1.137838693660715,
+      "rmse_flow_lane": 21.713775271424932,
+      "speed_precision": 0.01898335864331291,
+      "flow_lane_precision": 3.530784753379993e-05
+    },
+    "D12_I405_S": {
+      "rmse_speed": 1.57628246840144,
+      "rmse_flow_lane": 36.57053928605048,
+      "speed_precision": 0.013703127728055792,
+      "flow_lane_precision": 2.096405143686533e-05
+    }
+  },
+  "selected_before_extension_held": true
+}

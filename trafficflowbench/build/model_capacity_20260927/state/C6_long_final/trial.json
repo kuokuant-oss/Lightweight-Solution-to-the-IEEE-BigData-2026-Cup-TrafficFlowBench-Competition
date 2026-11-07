@@ -1,0 +1,76 @@
+{
+  "family": "cat",
+  "name": "C6_long",
+  "refit": true,
+  "production": true,
+  "train_split": "finalfit",
+  "heads": {
+    "y_v": {
+      "params": {
+        "iterations": 4800,
+        "depth": 6,
+        "learning_rate": 0.05,
+        "l2_leaf_reg": 10,
+        "loss_function": "RMSE",
+        "random_seed": 0,
+        "thread_count": 6,
+        "allow_writing_files": false,
+        "border_count": 128,
+        "verbose": 200
+      },
+      "completed": 4800,
+      "checkpoints": {
+        "chosen": 4800
+      },
+      "ordinary": {
+        "best": 4800,
+        "executed": 4800,
+        "reason": "frozen_refit",
+        "loss": 0.0
+      },
+      "minimum_budget": {
+        "best": 4800,
+        "executed": 4800,
+        "reason": "frozen_refit",
+        "loss": 0.0
+      },
+      "reload_max_diff": 0.0,
+      "seconds": 1613.920166015625
+    },
+    "y_q": {
+      "params": {
+        "iterations": 4800,
+        "depth": 6,
+        "learning_rate": 0.05,
+        "l2_leaf_reg": 10,
+        "loss_function": "RMSE",
+        "random_seed": 0,
+        "thread_count": 6,
+        "allow_writing_files": false,
+        "border_count": 128,
+        "verbose": 200
+      },
+      "completed": 4800,
+      "checkpoints": {
+        "chosen": 4800
+      },
+      "ordinary": {
+        "best": 4800,
+        "executed": 4800,
+        "reason": "frozen_refit",
+        "loss": 0.0
+      },
+      "minimum_budget": {
+        "best": 4800,
+        "executed": 4800,
+        "reason": "frozen_refit",
+        "loss": 0.0
+      },
+      "reload_max_diff": 0.0,
+      "seconds": 1487.6450560092926
+    }
+  },
+  "source_sha": "5984b99c6536e82e301fbdde5076bd04d05d82cf24700974f4987cab4e5734ce",
+  "seconds": 3101.7465620040894,
+  "maxrss": 3100491776
+}

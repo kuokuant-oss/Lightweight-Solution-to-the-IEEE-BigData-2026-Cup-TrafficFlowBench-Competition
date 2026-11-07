@@ -1,0 +1,21 @@
+#!/bin/sh
+# Run one project program inside a run tree, with the original sources unchanged.
+#
+#   bin/tfb-run <run_root> <program.py> [args...]
+#
+# <run_root> holds trafficflowbench/ (a copy of this package's tree) and
+# tfb_competition_data/kaggle_public (the released data). The programs were written when
+# the project lived at /Volumes/Crucial X9/trafficflow; scripts/ssd_runtime.py maps that
+# root (and /Volumes/X9-2TB/trafficflow) onto <run_root> at run time, so every read and
+# write stays inside the run tree and source bytes match the recorded originals.
+set -eu
+[ $# -ge 2 ] || { echo "usage: tfb-run <run_root> <program.py> [args...]" >&2; exit 2; }
+RUN=$(cd "$1" && pwd -P); shift
+REPO="$RUN/trafficflowbench"
+PY=${TFB_PYTHON:-python3}
+PYDIR=$(cd "$(dirname "$(command -v "$PY")")/.." && pwd -P)
+export PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 TFB_SSD_COMPAT=1
+export TFB_REPO_ROOT="$REPO" TFB_WORKSPACE_ROOT="$RUN" TFB_RUNTIME_ENV="$PYDIR"
+export PYTHONPATH="$REPO/scripts/ssd_bootstrap:$REPO:$REPO/src:$REPO/scripts"
+cd "$REPO"
+exec "$PY" -c 'import ssd_runtime; ssd_runtime.main()' "$@"

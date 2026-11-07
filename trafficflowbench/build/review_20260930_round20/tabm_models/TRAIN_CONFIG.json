@@ -1,0 +1,38 @@
+{
+  "status": "prospective fixed before all traffic fits and held outcomes",
+  "device": "mps",
+  "seed_base": 20260922,
+  "seed_slots": [
+    0,
+    1,
+    2
+  ],
+  "epochs": 8,
+  "batch": 1024,
+  "learning_rate": 0.001,
+  "weight_decay": 0.0001,
+  "grad_clip_norm": 5.0,
+  "architecture": {
+    "k": 32,
+    "n_blocks": 2,
+    "d_block": 128,
+    "dropout": 0.1,
+    "arch_type": "tabm",
+    "numerical_embedding": "author LinearReLUEmbeddings",
+    "embedding_dim": 4
+  },
+  "optimizer": "AdamW",
+  "early_stopping": false,
+  "best_epoch_selection": false,
+  "loss": "mean independent member BCE, multiplied by original same-row macro weight, unbiased batch mean; saved weightsfloat64 globalmean1, GPUfloat32 arithmetic",
+  "prediction": "mean sigmoid member probabilities; mean5 encoder probability paths forTE; mean3 seedslots before sharedN6/A25/physicaldecoder",
+  "source_sha256": {
+    "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_round20/tabm_models/train.py": "ffc084585ad555ea266ffb4bef35cca1cd93396dab6db6ff6f8a31f71a3d88f2",
+    "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_round20/tabm_models/model.py": "34c2269258a89eca30373e130386f39de2d5c70e1a9010bab0fd0cc707771a25",
+    "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_round20/tabm_models/model_embedded.py": "5887596333bf7eadee8ccf5127dac4b926a6db7eb1caa0dbc8925bb2fdc1a301",
+    "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_round20/tabm_runtime/tabm.py": "fc654af6a16bac53d893a8265c79d7af4ebddcb95ad0d600cc6b6bc6b7317ade",
+    "/Volumes/Crucial X9/trafficflow/trafficflowbench/build/review_20260930_round20/tabm_runtime/rtdl_num_embeddings.py": "48dfc019d447e0cd225deb8b8145b3efa8b42cde9aa314772d6e234753e1cee1"
+  },
+  "selected_backend_QA_sha256": "c0ba24710ad2c104ae13cd0ea23013f89387c07c4fdfd19b93b72dff499fdd3c",
+  "resource_basis": "Synthetic-only author embedding feasibility .0403/.0426sec per1024; alltrafficfitoutcomesunread. Author docsrecommendnumericembeddings. Onefixedembedding config chosen, plainprobe remains feasibilityonly."
+}

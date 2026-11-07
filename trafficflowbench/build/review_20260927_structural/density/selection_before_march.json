@@ -1,0 +1,11 @@
+{
+  "selected": "l2_uniform_0.5",
+  "training": "existing frozen January OOF residual head, no refit",
+  "selection_data": "February development holdout, full matched HMP50 strict and serve backgrounds",
+  "reason": "highest combined A/B gain among six prespecified candidates; positive in every active panel and all leave-one-day-out runs; global state essentially unchanged",
+  "selection_is_exploratory": true,
+  "original_primary": "l1_transition_0.25, also positive; not relabeled as primary retroactively",
+  "confirmation": "March released-observation pseudo targets using fixed seed 20260924 and previously cached mask/features; reconstruct production RLB_final+k* parent; only selected candidate compared",
+  "confirmation_limits": "March pseudo support is observed-only and cannot reproduce hidden official physics support. No April outcomes. No threshold, panel, or strength changes after seeing confirmation.",
+  "promotion_rule": "positive macro state+physics proxy, positive day-bootstrap lower bound, majority active panels positive, no key/input parity failure. Otherwise retain HMP50."
+}

@@ -1,0 +1,38 @@
+{
+ "variant": "RLB",
+ "months": [
+  "2031_01",
+  "2031_02"
+ ],
+ "panels": [
+  "D7_I10_E",
+  "D7_I10_W",
+  "D7_I210_E",
+  "D7_I210_W",
+  "D7_I405_N",
+  "D7_I405_S",
+  "D12_I5_N",
+  "D12_I5_S"
+ ],
+ "rows": 5952690,
+ "params": {
+  "objective": "l2",
+  "learning_rate": 0.05,
+  "num_leaves": 63,
+  "min_data_in_leaf": 300,
+  "feature_fraction": 0.8,
+  "bagging_fraction": 0.8,
+  "bagging_freq": 1,
+  "lambda_l2": 10.0,
+  "num_threads": 3,
+  "verbose": -1
+ },
+ "rounds": 400,
+ "free_subsample": 0.3,
+ "files": {
+  "y_v.txt": "df486065493bd30608166afc11e77edce6c5ccd49bd2c625905d1546b5340c2b",
+  "y_q.txt": "c55686887e4b150975a1f5a29846f6cf915bb4f4e54806038e2841a6a0e4204e",
+  "feats.json": "13e4780d55bec7dc2cd43d58a942a3959497c21ed5fa79be507c8b46751fcc47"
+ },
+ "secs": 314
+}

@@ -1,0 +1,13 @@
+{
+  "frozen_before_density_results": true,
+  "parent": "January two-fold RLB OOF for fit; January-to-February RLB transfer for holdout; RL on D12_I405",
+  "training_panels": "first eight queue panels, no panel/link IDs as features",
+  "parent_folds": "January cached day indices <14 vs >=14",
+  "head": {"num_boost_round": 200, "learning_rate": 0.05, "num_leaves": 31, "min_data_in_leaf": 400, "lambda_l2": 10, "feature_fraction": 0.8, "bagging_fraction": 0.8, "bagging_freq": 1, "num_threads": 3},
+  "variants": ["l1_transition", "l2_uniform"],
+  "strengths": [0.1, 0.25, 0.5],
+  "primary": {"variant": "l1_transition", "strength": 0.25},
+  "projection": "joint v/q weighted squared correction using previously frozen panel precision; target is density per lane",
+  "clipping": "speed [6,120.75], total flow >=50, density nonnegative; no outcome-dependent clipping",
+  "interpretation": "January OOF supplies residual training labels, not an independent head validation. February is the paired development holdout; multiple strengths are sensitivity checks, not blind confirmation. Freeze any promoted recipe before March released pseudo-target check."
+}

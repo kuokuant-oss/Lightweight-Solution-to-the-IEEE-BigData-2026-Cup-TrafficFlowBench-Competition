@@ -1,0 +1,10 @@
+{
+  "status": "Prospective input-only serving preparation while TabM fits; no adoption or inference authorization",
+  "scope": "Exactly8active panels×5queue_ongoing genuinewindows×validation/private =80windows; completephysicalnetworklinks×6forecaststeps before sample mapping; no train synthetic windows",
+  "inputs": "Legallyreleased masked mainline≤T, exact ownwindow_history T-12..T-1 speed/flow/occupancy/eligibility, rawpublishedoriginT; split-specific released rampT/T-1, K5same-split strictlyprior-calendar-date maskedrecency, legalprefixselector, strictJan31decoderBID. No validation/privatetruth, future score eligibility or hidden labels.",
+  "interface": "Original98feature order/mixed values preservedfloat64; same frozen fit-only base196transformfloat32; compactcenterTCNfloat32[N,4,9,13] and rowpointer maps. Allphysicalinputs generated before submission_key/sample membership attached.",
+  "binding": "sample_submission.csv/submission_key.csv/immutableR16b parent fullfileSHA; streamvalidate unchanged submission_id+task order across sample and R16b, bind all87kongoingphysicalkeys to exact submissionrows. Submission membership/positions live in metadata only, never modelinput.",
+  "parent_if_later_qualified": "CurrentthroughFeb R11cselrec3+unchangedA25; newarmgeom3; same strictJan31map and Marchcomponentoperator, original.75N+.25A/.5threshold/neveremptyguard unchanged. No model selection, outcome, CSVpatch or extra fit in this phase.",
+  "QA": "Exactgenuinehistory12timestampsstrictly<T and fullnetworklinks; originalraworiginunmodified; uniquecompleteforecastkeys+centerpointer; sampled mainline/ramp postTpoison of base/Afeatureunion+TCNinput; fit-onlytransformhash; source/code/source-file hashes; all80windowcount and43500physicalrows per split. No modelforward.",
+  "resources": "Chunked100k submission/sample CSV reads, sequentialpanel/splitCPU2; estimated<1GB/approximately1minute, coordinated against root soleTabMmainfit. Existing frozen core/joint/phase artifacts unchanged."
+}
