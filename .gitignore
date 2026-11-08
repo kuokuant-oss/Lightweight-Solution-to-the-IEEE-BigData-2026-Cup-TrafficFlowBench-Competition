@@ -6,3 +6,6 @@ __pycache__/
 *.pyc
 # run outputs, when --out points inside the repo
 /out/
+
+# Internal guide with links to the local research folder; not published
+/GUIDE.md
