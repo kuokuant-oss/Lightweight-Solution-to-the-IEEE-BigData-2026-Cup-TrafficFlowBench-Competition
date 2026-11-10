@@ -141,3 +141,21 @@ released data gives `onset.parquet` `bd0bb6d4…980f` and `ongoing.parquet` `4c3
 byte-identical to the full run of §1 and §4, and all 174,000 queue rows equal the submitted file. Of
 the 90 other files the segments write, 86 are byte-identical; the other 4 are two edited wrapper
 copies and two manifests that record run paths, code hashes and times.
+
+## 6. Final check from a clean clone, scored on Kaggle (2026-11-10)
+
+The repository was cloned at commit `7c6ffe8` into a new folder, so that only tracked files were
+present. `requirements.txt` was installed into a new Python 3.12.14 environment, and the versions
+matched the pins. The documentation edits made after this run change no program.
+
+```
+./run_reproduce.sh --data <kaggle_public> --out <new folder> --python <python3.12 with requirements.txt>
+```
+
+- `submission.csv`, 6,980,503 rows, SHA256
+  `cf5869e23d8bf063d37e6636355f66b8385be1ee7e7257a9943a16783ac00fc5`: **MATCH**.
+- Wall time 64 min 56 s: Task 1/3 52 min 8 s, onset 29 s, ongoing 3 min 19 s, Task 4 8 min 50 s,
+  assembly 8 s. CPU time is 8,429 s user.
+- The clone had no new or changed file after the run.
+- The file was submitted to Kaggle as submission 58201162. It scored public **0.90115** and private
+  **0.89493**, the same as the selected submission 56745207.

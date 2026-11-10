@@ -17,7 +17,7 @@ at serving time.
 For each cut τ (the forecast origin of a chosen window), `audit/truncate.py` builds a truncated view
 of the release, and `run_reproduce.sh --task2-only` serves Task 2 on it. `audit/compare.py` then
 compares, cell by cell, the windows the view still lists with the full run on the released data
-(`full-2` in `evidence/reproduction_checks.md` §4, SHA256 `cf5869e2…0fc5`). `audit/run_truncation.sh`
+(the full run of `evidence/reproduction_checks.md` §4, SHA256 `cf5869e2…0fc5`). `audit/run_truncation.sh`
 drives the cuts listed in `audit/cuts.csv`. It writes one checkpoint per cut, `results/cut_<name>.json`,
 and a line in `results/progress.log` as each finishes. A rerun skips the cuts that have a checkpoint.
 

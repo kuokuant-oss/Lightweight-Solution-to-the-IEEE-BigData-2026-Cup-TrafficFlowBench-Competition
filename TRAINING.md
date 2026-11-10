@@ -14,7 +14,8 @@ development repository, whose layout the package's `trafficflowbench/` folder mi
 comments (for example `training/scripts/34_task1_blend.py`). Programs marked "not in package" built
 intermediate tables only. The trainers are the last stages of a longer pipeline and read intermediate
 tables that are not distributed (listed at the end), so they do not retrain from the raw release on
-their own.
+their own. The logs and result files named in the "Record" column and elsewhere (for example
+`run.log`, `results.json`, `train_info.json`) are development records; they are not shipped.
 
 ## Conventions
 
@@ -350,7 +351,7 @@ These Task 1 heads are fitted inside `pipeline/task1.sh` on each month's own rel
   set by hand from a bottleneck scan of the training events.
 - Trainer: `build/review_20260924_ctm/ruler/onset_site/serve_official.py` (`__main__`: `fit_models`
   and `eval_template.templates`; in package). Events: `ruler/onset_site/events.py` (in `training/`).
-  The pickle was written in an earlier session folder that no longer exists; that folder's copy of the
+  The pickle was written in an earlier development folder that no longer exists; that folder's copy of the
   program is byte-identical to the shipped one.
 
 **FE site choice** (`build/review_20260925/round2/onset_joint/s6_FE_models.pkl`, `site_phase.json`)

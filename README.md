@@ -9,9 +9,9 @@ It reproduces our selected final submission from the released data.
 |---|---|
 | Selected submission | `submission_R26c_R21a_BND_T45.csv`, Kaggle 56745207 |
 | Public leaderboard | 0.90115 |
-| Private leaderboard | 0.89493 |
+| Private leaderboard | 0.89493 (rank 12) |
 | SHA256 of the submitted CSV | `cf5869e23d8bf063d37e6636355f66b8385be1ee7e7257a9943a16783ac00fc5` |
-| Technical report | `TrafficFlowBench_TechnicalReport_Anton.pdf` |
+| Technical report | sent to the organisers with the final package |
 
 The system has four parts, one per task:
 
@@ -52,7 +52,7 @@ Requirements:
 
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
-./run_reproduce.sh --data /path/to/kaggle_public --out /path/to/output_dir
+./run_reproduce.sh --data /path/to/kaggle_public --out /path/to/output_dir --python .venv/bin/python
 ```
 
 The run:
@@ -61,20 +61,20 @@ The run:
 - writes `submission.csv`;
 - prints its SHA256 next to the expected value above.
 
-A full run takes 70 minutes on an Apple M4 (10 cores, 16 GB RAM), with a peak memory of 5.5 GB.
+A full run takes 70 to 75 minutes on an Apple M4 (10 cores, 16 GB RAM), with a peak memory of 5.5 GB.
 The output folder needs about 10 GB.
 
 ### Running Task 2 on a new month
 
 ```bash
-./run_reproduce.sh --task2-only --data /path/to/new_month --out /path/to/output_dir
+./run_reproduce.sh --task2-only --data /path/to/new_month --out /path/to/output_dir --python .venv/bin/python
 ```
 
 This stages the run tree, runs `pipeline/onset.sh` and `pipeline/ongoing.sh`, and writes
 `submission.csv`. Task 1 (state) and Task 4 (path flows) are skipped, because Task 2 reads none of
 their outputs. Task 1 also checks the SHA256 and row counts of the released data, so it stops on any
 other data. The file keeps the full submission layout: the queue rows are predicted, and the state
-and odme rows are 0. The SHA256 is printed but not compared. Task 2 takes about 6 minutes.
+and odme rows are 0. The SHA256 is printed but not compared. Task 2 takes about 5 minutes (4 min 30 s measured).
 
 What to change:
 
@@ -128,7 +128,7 @@ docs/                      method overview and diagrams
 evidence/                  submission record, reproduction and time-rule checks
 audit/                     Task 2 truncation audit (delete everything after T, rerun, compare)
 third_party/               licence texts of the included third-party code
-checksums.txt              SHA256 of every file
+checksums.txt              SHA256 of every file; check with `shasum -a 256 -c checksums.txt`
 TRAINING.md  CHANGES_FROM_ORIGINAL.md  THIRD_PARTY_NOTICES.md  LICENSE
 ```
 

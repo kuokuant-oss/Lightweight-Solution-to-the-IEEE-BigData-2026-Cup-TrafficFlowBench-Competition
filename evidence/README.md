@@ -7,7 +7,7 @@ included.
 | File | Contents |
 |---|---|
 | `submission.json` | Kaggle record of the selected submission: reference 56745207, file name, time, public and private score, SHA256. |
-| `reproduction_checks.md` | Full run of `run_reproduce.sh` (time, peak memory, SHA256), the earlier segment runs compared file by file with the files that produced the submission, the checks on which training files the serving code reads, the runs of the Task-2-only entry for a new month, and a summary of the Task 2 truncation audit (`audit/RESULTS.md`). |
+| `reproduction_checks.md` | Full run of `run_reproduce.sh` (time, peak memory, SHA256), the earlier segment runs compared file by file with the files that produced the submission, the checks on which training files the serving code reads, the runs of the Task-2-only entry for a new month, a summary of the Task 2 truncation audit (`audit/RESULTS.md`), and the final run from a clean clone with its Kaggle score. |
 | `runtime-versions.txt` | Python, package versions and hardware of the verified runs. |
 | `check_comments_only.py` | Proof that the comment pass changed no code. It compares every code file with the uncommented first commit. |
 
