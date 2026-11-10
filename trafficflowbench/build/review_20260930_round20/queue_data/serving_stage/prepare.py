@@ -26,6 +26,8 @@ import gc,time,resource,itertools
 # longer reads them (package edit).
 EXPECTED_PARENT_SHA='05cebca599b04cba99802d2f97ab2a2145e6992cc3af12fa77c415a5770c5d64'
 PARENT=ROOT/'build/deliverables/2026-09-30/submission_R16b_R11c_CAPDENS_C85.csv'
+# Package edit (2026-11-10): the split list comes from TFB_SPLITS (default 'validation private', see README).
+SPLITS = tuple(os.environ.get('TFB_SPLITS', 'validation private').split())
 def indexes():
     """Reads the official queue_ongoing windows of both splits.
 
@@ -35,7 +37,7 @@ def indexes():
       the forecast time), and the SHA256 of each window_index.csv read.
     """
     records=[];source={}
-    for split in ['validation','private']:
+    for split in SPLITS:
         for panel in PANELS:
             path=D.R.RELEASE/f'task2/{panel}/{split}/window_index.csv'
             w=pd.read_csv(path,usecols=['window_id','panel','split','date','forecast_origin','condition'])
@@ -43,7 +45,7 @@ def indexes():
             w['origin']=pd.to_datetime(w.forecast_origin,utc=True);w['T']=w.origin.dt.hour*12+w.origin.dt.minute//5
             assert(w['T'].between(12,281)).all()and w.date.equals(w.origin.dt.strftime('%Y-%m-%d'))
             assert w.window_id.is_unique;records.append(w);source[str(path)]=sha(path)
-    idx=pd.concat(records,ignore_index=True);assert len(idx)==80 and idx.window_id.is_unique;return idx,source
+    idx=pd.concat(records,ignore_index=True);assert len(idx)==40*len(SPLITS) and idx.window_id.is_unique;return idx,source
 def submission_binding(windows):
     """Maps the queue rows of the official windows to their submission ids.
 
@@ -70,7 +72,7 @@ def submission_binding(windows):
         take=d.task.eq('queue')&d.window_id.isin(wanted);g=d[take].copy();g['submission_row_index']=offset+np.flatnonzero(take)
         if len(g):parts.append(g)
         assert np.array_equal(d.submission_id.to_numpy(),np.arange(offset+1,offset+len(d)+1));offset+=len(d)
-    assert offset==rows;mapping=pd.concat(parts,ignore_index=True);assert len(mapping)==87000 and mapping.submission_id.is_unique
+    assert offset==rows;mapping=pd.concat(parts,ignore_index=True);assert len(mapping)==43500*len(SPLITS) and mapping.submission_id.is_unique
     assert set(mapping.window_id)==wanted
     # Sample and R16b task/ID rows were identical; queue targetkeys are read ONLY
     # for output mapping and are never passed to a feature/encoder function.
@@ -91,7 +93,7 @@ def run():
     strict=np.load(BLOCKS,allow_pickle=True).item();D.L.BID={p:dict(zip(v['links'],v['bid']))for p,v in strict.items()}
     spec=json.loads((Q/'TRANSFORM_base196.json').read_text());assert sha(Q/'TRANSFORM_base196.json')==core['base_transform_sha256']
     sourcefiles=dict(indexhash);records={};audits=[];profiles=[];recency_sources=[];ramp_sources=[]
-    for split in ['validation','private']:
+    for split in SPLITS:
         # n = 43,500 rows per split: links of the 8 panels x 6 horizon steps x
         # 5 windows.
         win=windows[windows.split.eq(split)].copy();n=sum(len(strict[p]['links'])*6*5 for p in PANELS);assert n==43500

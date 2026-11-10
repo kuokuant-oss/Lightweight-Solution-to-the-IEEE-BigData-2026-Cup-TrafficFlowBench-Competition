@@ -31,6 +31,8 @@ SS = R20 / "queue_data/serving_stage"
 HERE = Path(__file__).resolve().parent
 R16B = Path("/Volumes/Crucial X9/trafficflow/trafficflowbench/build/deliverables/2026-09-30/submission_R16b_R11c_CAPDENS_C85.csv")
 R16B_SHA = "05cebca599b04cba99802d2f97ab2a2145e6992cc3af12fa77c415a5770c5d64"
+# Package edit (2026-11-10): the split list comes from TFB_SPLITS (default 'validation private', see README).
+SPLITS = tuple(os.environ.get('TFB_SPLITS', 'validation private').split())
 
 
 def pooled(ri, p):
@@ -53,13 +55,13 @@ def r16b_bits():
     """
     path = HERE / "R16b_ongoing_bits.npz"
     if path.exists():
-        z = np.load(path); return {s: z[s] for s in ("validation", "private")}
+        z = np.load(path); return {s: z[s] for s in SPLITS}
     import hashlib
     h = hashlib.sha256()
     with R16B.open("rb") as f:
         for b in iter(lambda: f.read(8 << 20), b""): h.update(b)
     assert h.hexdigest() == R16B_SHA
-    maps = {s: pd.read_parquet(SS / f"{s}_SUBMISSION_MAP.parquet") for s in ("validation", "private")}
+    maps = {s: pd.read_parquet(SS / f"{s}_SUBMISSION_MAP.parquet") for s in SPLITS}
     want = {}
     for s, m in maps.items():
         for i, sid in enumerate(m.submission_id.to_numpy()): want[int(sid)] = (s, i)
@@ -84,7 +86,7 @@ def run(arm_expr, tag, sel_expr="P"):
       sel_expr: The same for the selrec slot ('P' = the parent selrec).
     """
     bits = r16b_bits(); res = {}
-    for split in ("validation", "private"):
+    for split in SPLITS:
         ri = pd.read_parquet(SS / f"{split}_ROW_INDEX.parquet")
         mp = pd.read_parquet(SS / f"{split}_SUBMISSION_MAP.parquet")
         assert mp[["window_id", "link_id", "step"]].equals(ri[["window_id", "link_id", "step"]])

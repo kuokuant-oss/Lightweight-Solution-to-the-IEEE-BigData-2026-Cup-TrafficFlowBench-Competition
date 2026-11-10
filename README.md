@@ -64,6 +64,40 @@ The run:
 A full run takes 70 minutes on an Apple M4 (10 cores, 16 GB RAM), with a peak memory of 5.5 GB.
 The output folder needs about 10 GB.
 
+### Running Task 2 on a new month
+
+```bash
+./run_reproduce.sh --task2-only --data /path/to/new_month --out /path/to/output_dir
+```
+
+This stages the run tree, runs `pipeline/onset.sh` and `pipeline/ongoing.sh`, and writes
+`submission.csv`. Task 1 (state) and Task 4 (path flows) are skipped, because Task 2 reads none of
+their outputs. Task 1 also checks the SHA256 and row counts of the released data, so it stops on any
+other data. The file keeps the full submission layout: the queue rows are predicted, and the state
+and odme rows are 0. The SHA256 is printed but not compared. Task 2 takes about 6 minutes.
+
+What to change:
+
+- **`--data`** is the data root: a folder with the layout of the released `kaggle_public` folder.
+  It is the only path to set. The run tree links it read-only, and every program reads the data
+  through that link.
+- **`--splits "<a> <b> …"`**, or the environment variable `TFB_SPLITS`, is the list of Task 2
+  splits to serve. The default is `"validation private"`. Every queue row of `submission_key.csv`
+  must belong to a listed split. `pipeline/assemble.py` stops when a queue row has no prediction.
+
+Assumptions about the new data:
+
+- the same 8 corridors with the same links, under `corridors/` and `task2/`;
+- the training split as released (`corridors/<corridor>/train/`, `task2/<corridor>/train/`). The
+  serving code reads only the first train day (2030-06-01), for the link order. Everything else it
+  needs from training comes from the shipped models and tables;
+- `task2/<corridor>/<split>/window_index.csv` and `window_history.parquet` for each split, and the
+  masked layer `corridors/<corridor>/<split>/mainline_states_masked/`;
+- `submission_key.csv` and `sample_submission.csv` with the queue rows of those windows;
+- the released window layout: 5 onset and 5 ongoing windows per corridor and split, 6 steps each
+  (T+5 … T+30). Some programs assert the per-split counts that follow from it (for example 43,500
+  ongoing rows and 40 ongoing windows per split).
+
 ### Notes
 
 - **Task 2 is online.** Each window reads only released data stamped at or before its origin T:

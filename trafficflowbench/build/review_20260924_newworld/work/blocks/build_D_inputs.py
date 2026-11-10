@@ -24,6 +24,10 @@ ROOT='/Volumes/Crucial X9/trafficflow/trafficflowbench'
 # MULTI_SITE: panels that take the C3 site choice. D7_I210_W keeps production.
 B=np.load('my_blocks.npy',allow_pickle=True).item(); BID={p:dict(zip(v['links'],v['bid'])) for p,v in B.items()}
 SINGLE=['D7_I10_E','D7_I10_W','D7_I210_E','D7_I405_N']; MULTI_SITE=['D12_I5_N','D12_I5_S','D7_I405_S']
+# Package edit (2026-11-10): the split list comes from TFB_SPLITS (default 'validation private', see README).
+SPLITS = tuple(os.environ.get('TFB_SPLITS', 'validation private').split())
+NWTAG = lambda s: {'validation': 'realval', 'private': 'realpriv'}.get(s, 'real' + s)  # newworld file tag of a split
+PANEL_RX = r'Q2_(.+)_(?:' + '|'.join(SPLITS) + ')_'  # panel name from a window id Q2_<panel>_<split>_<n>
 prod=pd.read_parquet(f'{ROOT}/build/strongest_candidate_20260922/onset/production/onset_component.parquet'); prod['link_id']=prod.link_id.astype(str)
 c3=pd.read_parquet(f'{Z}/onset_component_submission_C3_onset_sitehazard_minev10_umin0.01_exclD7_I210_W.parquet'); c3['link_id']=c3.link_id.astype(str)
 # Join production and C3 decisions cell by cell (same rows, ISO timestamps).
@@ -45,15 +49,15 @@ for wid,ix in m.groupby('window_id',sort=False).indices.items():
         s=pd.Series(p).groupby(b).mean(); sel=set(s[s>=0.7].index)|{s.idxmax()}; dec[ix]=np.isin(b,list(sel)).astype(int)
 m['dec']=dec
 # One file per split; prob holds the 0/1 decision so that prob >= 0.5 decodes it.
-for split,tag in [('validation','realval'),('private','realpriv')]:
+for split,tag in [(s,NWTAG(s)) for s in SPLITS]:
     x=m[m.split==split]; x[['window_id','timestamp','link_id']].assign(prob=x.dec.astype(float)).to_parquet(f'D_onset_{tag}.parquet',index=False)
     ch=x[x.dec!=x.queue_pred]; print(split,'onset cells changed vs production',len(ch),'windows',ch.window_id.nunique(),ch.groupby('panel').window_id.nunique().to_dict())
 # ongoing block-mean
 # Package edit (2026-11-07): skipped when the ongoing A-ensemble probabilities are absent (the onset run has none).
-for tag in [t for t in ['realval','realpriv'] if os.path.exists(f'../feat/ogens_{t}_prob.parquet')]:
+for tag in [t for t in [NWTAG(s) for s in SPLITS] if os.path.exists(f'../feat/ogens_{t}_prob.parquet')]:
     # Ongoing: A-ensemble link probability averaged within (window, timestamp,
     # block). The panel name is parsed from the window id Q2_<panel>_<split>_<n>.
-    e=pd.read_parquet(f'../feat/ogens_{tag}_prob.parquet'); e['panel']=e.window_id.str.extract(r'Q2_(.+)_(?:validation|private)_')[0]
+    e=pd.read_parquet(f'../feat/ogens_{tag}_prob.parquet'); e['panel']=e.window_id.str.extract(PANEL_RX)[0]
     e['bid']=[BID[p][l] for p,l in zip(e.panel,e.link_id)]
     e['bm']=e.groupby(['window_id','timestamp','bid']).prob.transform('mean')
     e[['window_id','timestamp','link_id']].assign(prob=e.bm).to_parquet(f'D_ongoing_{tag}.parquet',index=False)

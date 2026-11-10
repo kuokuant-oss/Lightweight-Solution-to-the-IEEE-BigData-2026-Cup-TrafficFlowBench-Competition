@@ -104,7 +104,7 @@ def run(kind, split):
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(); ap.add_argument("kinds", nargs="+"); ap.add_argument("--splits", nargs="+", default=["validation", "private"])
+    ap = argparse.ArgumentParser(); ap.add_argument("kinds", nargs="+"); ap.add_argument("--splits", nargs="+", default=os.environ.get("TFB_SPLITS", "validation private").split())  # package edit (2026-11-10): default from TFB_SPLITS
     a = ap.parse_args()
     for k in a.kinds:
         for s in a.splits:

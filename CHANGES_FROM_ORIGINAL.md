@@ -132,3 +132,45 @@ New package files (not copies of the development tree):
   (`strength/validation_predictions.parquet`), without its February research scoring.
 - `pipeline/make_state_updates_gap_prp.py` — copy of `fixes/make_state_updates_gap_prp.py` (FIXES F2).
 - `pipeline/task1_final_sources.py` — copies the six keyed sources to `<run>/final_sources/`.
+
+## Task 2 on a new month (2026-11-10)
+
+The organisers will rerun Task 2 on a newly generated month with the same file layout. These edits
+make the run easy to point at new data and change nothing on the released data: on it, every
+default reproduces the earlier outputs byte for byte (see `evidence/reproduction_checks.md` §4).
+No model, threshold or decision rule changed. SHA prefixes are package before -> after.
+
+- `run_reproduce.sh` (`c0697fe1` -> `18787b95`): `--task2-only` runs stages 1, 3, 4 and 6 and
+  skips Task 1 (which checks the SHA256 and row counts of the released data) and Task 4.
+  `--splits` sets `TFB_SPLITS`. `--help` prints the whole header comment.
+- `pipeline/assemble.py` (`9f845056` -> `f828b3eb`): every queue row of `submission_key.csv` must
+  now be covered by the onset or the ongoing source. Before, an uncovered queue row was written as
+  0 without a message. `--queue-only` writes the full layout with the state and odme rows set to 0.
+- `TFB_SPLITS` (default `validation private`) replaces the split names that were written into the
+  Task 2 code. The newworld file tags stay `realval` / `realpriv` for the released splits (other
+  splits get `real<split>`), the step-log names stay `*_val` / `*_pri`, and the counts that are
+  totals over both splits are now the per-split count times the number of splits. The per-split
+  counts of the window layout (43,500 ongoing rows, 40 ongoing windows, 7,250 onset step-6 rows)
+  are unchanged. Each edited Python file is marked `Package edit (2026-11-10)`.
+
+| File | SHA prefix |
+|---|---|
+| `pipeline/onset.sh` | `5b791fbe` -> `d822d379` |
+| `pipeline/ongoing.sh` | `ebd6f2f0` -> `8b29a959` |
+| `pipeline/onset_head_serve.py` | `81e3c05e` -> `62968bff` |
+| `pipeline/onset_c3.py` | `8f63cb11` -> `bdf7fce0` |
+| `pipeline/onset_sources.py` | `a0080995` -> `b459b497` |
+| `build/review_20260924_newworld/work/blocks/build_D_inputs.py` | `79a33dfd` -> `85f56d55` |
+| `build/review_20260925/make_never_empty_fallback.py` | `c17dee5c` -> `cd07bf78` |
+| `build/review_20260925/round2/synthesis/sv2_official_FEA1.py` | `04a9a3f6` -> `ca7d5faf` |
+| `build/review_20260929_target092/main/serve_refit.py` | `7e11bcad` -> `aae9b18d` |
+| `build/review_20260930_round20/queue_data/serving_stage/prepare.py` | `9c84b298` -> `c159cb90` |
+| `build/review_20261001_fresh/serve/make_r16b_bits.py` | `deafed61` -> `304d1014` |
+| `build/review_20261001_fresh/serve/s1_serve_prob.py` | `92c3f582` -> `8d818a30` |
+| `build/review_20261001_fresh/serve/s2_decide.py` | `908d1024` -> `4a540269` |
+| `build/review_20261001_r22/serve/make_r21a_bits.py` | `45b2b41d` -> `f0f5be97` |
+| `build/review_20261001_r22/serve/r22_serve.py` | `2e3e399a` -> `c3fbc549` |
+| `build/review_20261001_r26/serve/make_ongoing_source.py` | `4644f504` -> `c7a7be85` |
+
+None of these files is pinned by a training manifest. The 26 pinned files listed above keep their
+bytes.

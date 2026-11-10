@@ -33,7 +33,8 @@ PROB = HERE / "prob"; PROB.mkdir(exist_ok=True)
 R21A = ROOT / "build/deliverables/2026-10-01/submission_R21a_R16b_MONO_C1f.csv"
 R21A_SHA = "28794f3cb42ff58379bec29061e84b0d9c0c73dcc5090853ddf40fe733b8b705"
 SPEC = json.loads((Q / "TRANSFORM_base196.json").read_text()); FS = SPEC["original_features"]
-SPLITS = ("validation", "private")
+# Package edit (2026-11-10): the split list comes from TFB_SPLITS (default 'validation private', see README).
+SPLITS = tuple(os.environ.get("TFB_SPLITS", "validation private").split())
 
 
 def sha(p):

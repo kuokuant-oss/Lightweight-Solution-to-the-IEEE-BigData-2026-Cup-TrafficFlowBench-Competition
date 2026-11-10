@@ -33,6 +33,8 @@ import common as C  # noqa: E402
 # masked-layer caches; fakeHERE/cache links to the caches that onset.sh builds in step 2.
 SO = C.SO; SO.HERE = C.ONS / 'fakeHERE'   # as sv2_official_FEA1.py: caches for both official splits
 from serve_official import official_rows, score_rows, decode  # noqa: E402
+# Package edit (2026-11-10): the split list comes from TFB_SPLITS (default 'validation private', see README).
+SPLITS = tuple(os.environ.get('TFB_SPLITS', 'validation private').split())
 
 DEST = ROOT / ('build/review_20260924_newworld/work/onset_site/'
                'onset_component_submission_C3_onset_sitehazard_minev10_umin0.01_exclD7_I210_W.parquet')
@@ -51,7 +53,7 @@ def main():
     comp['link_id'] = comp.link_id.astype(str)
     choice = {}
     # Site choice per split on the multi-site panels; the two splits have disjoint window ids.
-    for split in ('validation', 'private'):
+    for split in SPLITS:
         offi = official_rows(split)
         offi = offi[offi.panel.isin(C.MS)].reset_index(drop=True)
         ch = C.choices(score_rows(offi, C.UMODELS), 'u')

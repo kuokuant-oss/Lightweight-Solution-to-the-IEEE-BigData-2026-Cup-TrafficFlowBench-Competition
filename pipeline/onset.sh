@@ -28,6 +28,8 @@ export TFB_PYTHON="${TFB_PYTHON:-$HOME/.venvs/tfb-final-R26c/bin/python}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-2}"
 export OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS" MKL_NUM_THREADS="$OMP_NUM_THREADS" VECLIB_MAXIMUM_THREADS="$OMP_NUM_THREADS"
 LOG="$RUN/logs/onset"; mkdir -p "$LOG"
+# SPLITS: the released splits to serve, in order (TFB_SPLITS, default "validation private"; see README).
+export TFB_SPLITS="${TFB_SPLITS:-validation private}"; SPLITS=$TFB_SPLITS
 
 # Runs one program through bin/tfb-run and prints its wall time and peak memory.
 # Arguments:
@@ -54,7 +56,7 @@ step head_decode scripts/audit_strongest_onset_selected_20260922.py production  
 
 # 2. D: masked-layer caches (validation, private) for the multi-site panels, C3 site choice, block decoding
 for p in D12_I5_N D12_I5_S D7_I210_W D7_I405_S; do
-  for s in validation private; do
+  for s in $SPLITS; do
     step "cache_${p}_$s" build/review_20260924_ctm/cache/build_cache.py "$p" "$s"
   done
 done

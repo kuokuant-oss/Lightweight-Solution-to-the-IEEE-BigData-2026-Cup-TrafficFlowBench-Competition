@@ -37,6 +37,12 @@ REL="$RUN/tfb_competition_data/kaggle_public"
 NW=build/review_20260924_newworld/work/feat
 CT=build/review_20260924_ctm
 LOG="$RUN/logs/ongoing"; mkdir -p "$LOG"
+# SPLITS: the released splits to serve, in order (TFB_SPLITS, default "validation private"; see README).
+export TFB_SPLITS="${TFB_SPLITS:-validation private}"; SPLITS=$TFB_SPLITS
+# Returns the newworld file tag of a split: realval / realpriv for the released splits, real<split> otherwise.
+nwtag() { case $1 in validation) echo realval ;; private) echo realpriv ;; *) echo "real$1" ;; esac; }
+# Returns the short step-log name of a split: val / pri for the released splits, the split name otherwise.
+short() { case $1 in validation) echo val ;; private) echo pri ;; *) echo "$1" ;; esac; }
 
 # Runs one program through bin/tfb-run and prints its wall time and peak memory.
 # Arguments:
@@ -63,26 +69,25 @@ here() {  # here <file> <dir>: the only command not run through tfb-run.
 }
 
 # --- F2 operator, A slot: newworld serve tables (originals deleted; same builders, serve side only) -------------
-step nw_feats_val  $NW/build_serve_feats.py "$REL" validation realval;  here serve_realval.parquet  $NW
-step nw_feats_pri  $NW/build_serve_feats.py "$REL" private realpriv;    here serve_realpriv.parquet $NW
-step nw_geom_val   $NW/build_geom.py serve "$REL" validation realval
-step nw_geom_pri   $NW/build_geom.py serve "$REL" private realpriv
-step ogens         $NW/ogens_serve.py realval realpriv                  # -> ogens_{realval,realpriv}_prob.parquet
+TAGS=""
+for s in $SPLITS; do t=$(nwtag "$s"); TAGS="$TAGS $t"
+  step "nw_feats_$(short "$s")" $NW/build_serve_feats.py "$REL" "$s" "$t"; here "serve_$t.parquet" $NW
+done
+for s in $SPLITS; do step "nw_geom_$(short "$s")" $NW/build_geom.py serve "$REL" "$s" "$(nwtag "$s")"; done
+step ogens         $NW/ogens_serve.py $TAGS                             # -> ogens_{realval,realpriv}_prob.parquet
 
 # --- F2 operator, N slot: CTM serve tables (ctm/serve/run_real.sh, serve side) ----------------------------------
-step ctm_feats_val $CT/ruler/feat/build_serve_feats.py "$REL" validation real_validation; here serve_real_validation.parquet $CT/serve
-step ctm_feats_pri $CT/ruler/feat/build_serve_feats.py "$REL" private real_private;       here serve_real_private.parquet    $CT/serve
-step ctm_geom_val  $CT/ruler/feat/build_geom.py serve "$REL" validation real_validation
-step ctm_geom_pri  $CT/ruler/feat/build_geom.py serve "$REL" private real_private
-step rec_val       $CT/dense/build_recency.py real validation queue_ongoing
-step rec_pri       $CT/dense/build_recency.py real private queue_ongoing
-for sp in validation private; do
+for s in $SPLITS; do
+  step "ctm_feats_$(short "$s")" $CT/ruler/feat/build_serve_feats.py "$REL" "$s" "real_$s"; here "serve_real_$s.parquet" $CT/serve
+done
+for s in $SPLITS; do step "ctm_geom_$(short "$s")" $CT/ruler/feat/build_geom.py serve "$REL" "$s" "real_$s"; done
+for s in $SPLITS; do step "rec_$(short "$s")" $CT/dense/build_recency.py real "$s" queue_ongoing; done
+for sp in $SPLITS; do
   for p in D7_I10_E D7_I10_W D7_I210_E D7_I210_W D7_I405_N D7_I405_S D12_I5_N D12_I5_S; do
     step "cache_${p}_$sp" $CT/cache/build_cache.py $p $sp             # masked-layer day cache for the selector
   done
 done
-step sel2_val      $CT/dense/serve_sel2.py validation
-step sel2_pri      $CT/dense/serve_sel2.py private
+for s in $SPLITS; do step "sel2_$(short "$s")" $CT/dense/serve_sel2.py "$s"; done
 
 # --- F2 decision: refit N6 mix .75N + .25A, my_blocks block mean >= .5, generic never-empty fallback -----------
 step fallback      build/review_20260925/make_never_empty_fallback.py   # -> candidates/a_block_fallback.parquet (all windows)

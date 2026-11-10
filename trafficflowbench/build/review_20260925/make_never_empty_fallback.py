@@ -15,7 +15,12 @@ This file states the rule for every window instead, the same rule the R20 operat
 serve_refit.py imports never_empty() and applies it to the F2 decode of every window. Inputs are <= T only.
 """
 # Runs in the reproduction as `pipeline/ongoing.sh` step `fallback`.
+import os
 import numpy as np, pandas as pd
+# Package edit (2026-11-10): the split list comes from TFB_SPLITS (default 'validation private', see README).
+SPLITS = tuple(os.environ.get('TFB_SPLITS', 'validation private').split())
+NWTAG = lambda s: {'validation': 'realval', 'private': 'realpriv'}.get(s, 'real' + s)  # newworld file tag of a split
+PANEL_RX = r'Q2_(.+)_(?:' + '|'.join(SPLITS) + ')_'  # panel name from a window id Q2_<panel>_<split>_<n>
 from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
@@ -40,8 +45,8 @@ def a_block_decode():
     """
     B = np.load(NW / 'blocks/my_blocks.npy', allow_pickle=True).item(); BID = {p: dict(zip(v['links'], v['bid'])) for p, v in B.items()}
     parts = []
-    for tag, split in (('realval', 'validation'), ('realpriv', 'private')):
-        e = pd.read_parquet(NW / f'feat/ogens_{tag}_prob.parquet'); e['panel'] = e.window_id.str.extract(r'Q2_(.+)_(?:validation|private)_')[0]
+    for tag, split in [(NWTAG(s), s) for s in SPLITS]:
+        e = pd.read_parquet(NW / f'feat/ogens_{tag}_prob.parquet'); e['panel'] = e.window_id.str.extract(PANEL_RX)[0]
         e['bid'] = [BID[p][l] for p, l in zip(e.panel, e.link_id)]
         e['bm'] = e.groupby(['window_id', 'timestamp', 'bid']).prob.transform('mean')
         parts.append(e[['window_id', 'timestamp', 'link_id']].assign(split=split, queue_pred=(e.bm >= 0.5).astype('int64')))
@@ -52,9 +57,9 @@ if __name__ == '__main__':
     out = a_block_decode()
     # 87,000 rows: every official ongoing (window, link, timestamp) cell of
     # validation and private.
-    assert len(out) == 87000 and not out[['window_id', 'timestamp', 'link_id']].duplicated().any()
+    assert len(out) == 43500 * len(SPLITS) and not out[['window_id', 'timestamp', 'link_id']].duplicated().any()
     OUT.parent.mkdir(exist_ok=True); assert not OUT.exists(), OUT
     out.to_parquet(OUT, index=False)
     w = out.groupby(['split', 'window_id']).queue_pred.sum()
     print('A-block fallback rows', len(out), 'windows', len(w), 'queued', int(out.queue_pred.sum()),
-          'windows with an empty A-block decode', {s: int((w[s] == 0).sum()) for s in ('validation', 'private')})
+          'windows with an empty A-block decode', {s: int((w[s] == 0).sum()) for s in SPLITS})

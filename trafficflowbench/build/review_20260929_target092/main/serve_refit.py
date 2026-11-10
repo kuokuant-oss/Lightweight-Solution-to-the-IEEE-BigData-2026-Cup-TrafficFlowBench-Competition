@@ -30,6 +30,9 @@ CHAMP = ROOT / 'build/deliverables/2026-09-27/capacity/submission_HMP50_DK50_CAP
 PROD = [CT / f'rep2/m_R_V2selrec_s0_seed{i}.txt' for i in range(3)] + [CT / f'rep2/m_R_V2geomselrec_s0_seed{i}.txt' for i in range(3)]
 NEW = [RF / f'm_R_V2selrec_refit_seed{i}.txt' for i in range(3)] + [RF / f'm_R_V2geomselrec_refit_seed{i}.txt' for i in range(3)]
 # package edit: GUARD = 'Q2_D12_I5_N_validation_007' removed; no window is hard-coded (never-empty rule below)
+# Package edit (2026-11-10): the split list comes from TFB_SPLITS (default 'validation private', see README).
+SPLITS = tuple(os.environ.get('TFB_SPLITS', 'validation private').split())
+NWTAG = lambda s: {'validation': 'realval', 'private': 'realpriv'}.get(s, 'real' + s)  # newworld file tag of a split
 B = np.load(CT / 'ruler/blocks/my_blocks.npy', allow_pickle=True).item(); BID = {k: dict(zip(v['links'], v['bid'])) for k, v in B.items()}
 
 
@@ -43,7 +46,7 @@ def ens(models, s):
 # same-split recency features. pN0 / pN1: production / refit N6 mean;
 # bp0 / bp1: link-group mean of .75 pN + .25 pA at each time.
 parts = []
-for sp, rt, tag in [('validation', 'realvali', 'realval'), ('private', 'realpriv', 'realpriv')]:
+for sp, rt, tag in [(s, 'real' + s[:4], NWTAG(s)) for s in SPLITS]:
     s = pd.read_parquet(CT / f'serve/serve_real_{sp}.parquet'); s = s[s.condition.eq('queue_ongoing')].reset_index(drop=True)
     s = s.merge(pd.read_parquet(CT / f'ruler/feat/geom_serve_real_{sp}.parquet'), on=['window_id', 'link_id', 'step'], how='left')
     sel = pd.read_parquet(CT / f'dense/sel2_{sp}.parquet')[['window_id', 'prev_rej', 'n_rej']]; s = s.merge(sel, on='window_id', how='left')
@@ -79,7 +82,7 @@ assert d.fallback.notna().all()
 fired = {}
 for k, name in (('0', 'production'), ('1', 'refit')):
     d['d' + k], empty = never_empty(d.window_id.to_numpy(), (d['bp' + k] >= .5).astype(int), d.fallback)
-    fired[name] = {sp: sorted(d.window_id[empty & (d.split == sp).to_numpy()].unique()) for sp in ('validation', 'private')}
+    fired[name] = {sp: sorted(d.window_id[empty & (d.split == sp).to_numpy()].unique()) for sp in SPLITS}
     print('never-empty fallback fired,', name, 'decode:', {sp: len(v) for sp, v in fired[name].items()}, fired[name], flush=True)
 json.dump(fired, open(HERE / 'never_empty_fallback.json', 'w'), indent=1)
 # never-empty check on the new decision (outside the guard)

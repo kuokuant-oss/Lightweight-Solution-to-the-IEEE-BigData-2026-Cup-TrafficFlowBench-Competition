@@ -31,12 +31,15 @@ SO = C.SO; SO.HERE = C.ONS / 'fakeHERE'
 from serve_official import official_rows, decode
 from pv_sites import site_of
 ROOT = C.ROOT; REL = ROOT.parent / 'tfb_competition_data' / 'kaggle_public'
+# Package edit (2026-11-10): the split list comes from TFB_SPLITS (default 'validation private', see README).
+SPLITS = tuple(os.environ.get('TFB_SPLITS', 'validation private').split())
+NWTAG = lambda s: {'validation': 'realval', 'private': 'realpriv'}.get(s, 'real' + s)  # newworld file tag of a split
+PANEL_RX = r'Q2_(.+)_(?:' + '|'.join(SPLITS) + ')_'  # panel name from a window id Q2_<panel>_<split>_<n>
 # Production onset component (0922 head + panel_shrink25 decoder) and
 # candidate D's decisions (Dref: prob by window, timestamp and link).
 prod = pd.read_parquet(ROOT / 'build/strongest_candidate_20260922/onset/production/onset_component.parquet'); prod['link_id'] = prod.link_id.astype(str)
 prod['timestamp'] = pd.to_datetime(prod.timestamp, utc=True).dt.strftime('%Y-%m-%dT%H:%M:%SZ')
-Dv = pd.read_parquet(ROOT / 'build/review_20260924_newworld/work/blocks/D_onset_realval.parquet'); Dp = pd.read_parquet(ROOT / 'build/review_20260924_newworld/work/blocks/D_onset_realpriv.parquet')
-Dall = pd.concat([Dv, Dp], ignore_index=True); Dall['link_id'] = Dall.link_id.astype(str)
+Dall = pd.concat([pd.read_parquet(ROOT / f'build/review_20260924_newworld/work/blocks/D_onset_{NWTAG(s)}.parquet') for s in SPLITS], ignore_index=True); Dall['link_id'] = Dall.link_id.astype(str)
 Dref = Dall.set_index(['window_id', 'timestamp', 'link_id']).prob
 # Package edit (2026-11-07): the A1 and FE reference files are parity checks only (assertions (2), (3)); they are
 # read and asserted when present, skipped when absent (a cold run does not have them).
@@ -79,13 +82,13 @@ def to_rows(comp, dec):
       common.MS keep D's prob.
     """
     new = Dall[Dall.window_id.isin(comp.window_id)].merge(dec[['window_id', 'timestamp', 'link_id', 'queue_pred']], on=['window_id', 'timestamp', 'link_id'], how='left')
-    pan = new.window_id.str.extract(r'Q2_(.+)_(?:validation|private)_')[0]
+    pan = new.window_id.str.extract(PANEL_RX)[0]
     new['prob'] = np.where(pan.isin(C.MS), new.queue_pred.astype(float), new.prob)
     return new[['window_id', 'timestamp', 'link_id', 'prob']]
 
 
 summary = {}; allnew = []; det = []
-for split in ('validation', 'private'):
+for split in SPLITS:
     # Per-site rows of the official onset windows (released history T-60 ..
     # T-5 min and the masked layer at T), with u-model and FE scores. ch0 is
     # D's choice (u-model); ch1 is the FE choice, skipping the same windows.

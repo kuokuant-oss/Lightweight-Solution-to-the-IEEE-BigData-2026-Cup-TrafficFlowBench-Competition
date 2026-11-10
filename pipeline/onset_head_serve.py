@@ -36,6 +36,8 @@ TI = M.TI
 # ARM: 145's model arm used for the final model: onset features plus the conditional-hazard terms
 # (per link and 5-minute time-of-day slot, the onset frequency over the fit dates).
 ARM = 'feature_hazard'
+# Package edit (2026-11-10): the split list comes from TFB_SPLITS (default 'validation private', see README).
+SPLITS = tuple(os.environ.get('TFB_SPLITS', 'validation private').split())
 
 
 def main():
@@ -71,7 +73,7 @@ def main():
     arm = ARM
     # ---- from 145 main(), case 'final' (unchanged apart from indentation) ----
     serve = []
-    for split in ['validation', 'private']:
+    for split in SPLITS:
         for panel in panels:
             s = TI.features_for_split(panel, split, oblique=True, dispersion=True, clock=True, origin_obs=True, prior_dates=tuple(fitdates))
             # Onset windows only, step 6 (T+30), the step the onset head predicts.

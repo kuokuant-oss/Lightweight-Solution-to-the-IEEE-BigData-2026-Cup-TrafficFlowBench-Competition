@@ -7,14 +7,17 @@ written by s3_patch_csv.py from exactly that delta). This script saves that delt
 """
 # Runs in pipeline/ongoing.sh ("r21a_bits"), after s2_decide.py.
 # R21a = where(C1f != same-operator parent, C1f, R16b).
+import os
 import numpy as np
+# Package edit (2026-11-10): the split list comes from TFB_SPLITS (default 'validation private', see README).
+SPLITS = tuple(os.environ.get('TFB_SPLITS', 'validation private').split())
 from pathlib import Path
 HERE = Path(__file__).resolve().parent
 R21S = HERE.parents[1] / 'review_20261001_fresh/serve'
 
 path = HERE / 'R21a_ongoing_bits.npz'
 assert not path.exists(), path
-bits = {s: np.load(R21S / f'decisions_C1f_{s}.npz')['delta'].astype(np.int8) for s in ('validation', 'private')}
+bits = {s: np.load(R21S / f'decisions_C1f_{s}.npz')['delta'].astype(np.int8) for s in SPLITS}
 assert all(len(b) == 43500 for b in bits.values())
 np.savez(path, **bits)
 print({s: (len(b), int(b.sum())) for s, b in bits.items()})

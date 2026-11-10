@@ -76,3 +76,45 @@ outputs.
 The Task 2 serving code reads raw training data only from the first train day (2030-06-01), and
 only its link ids and mileposts, to fix the link order. Everything else it needs from the training
 months comes from the shipped models and tables.
+
+## 4. Task 2 entry for a new month (2026-11-10)
+
+After the edits listed in `CHANGES_FROM_ORIGINAL.md` ("Task 2 on a new month"), these runs used
+the released data, the pinned environment and fresh output folders.
+
+**Full run, defaults.** `./run_reproduce.sh --data <kaggle_public> --out <new folder> --python <python3.12>`
+gave `submission.csv` with 6,980,503 rows and SHA256
+`cf5869e23d8bf063d37e6636355f66b8385be1ee7e7257a9943a16783ac00fc5`: **MATCH**. Wall time was
+74 min 44 s: Task 1/3 60 min, onset 36 s, ongoing 3 min 55 s, Task 4 9 min 47 s and assembly 7 s.
+
+**Task 2 only, default splits.**
+
+```
+./run_reproduce.sh --task2-only --data <kaggle_public> --out <new folder> --python <python3.12>
+```
+
+- Wall time: 4 min 30 s (onset 39 s, ongoing 3 min 42 s).
+- `final_sources/onset.parquet` (SHA256 `bd0bb6d4…980f`) and `final_sources/ongoing.parquet`
+  (`4c3d75c4…36eb`) are byte-identical to the files of the full run in §1.
+- All 174,000 queue rows of `submission.csv` are identical to the queue rows of the submitted file.
+- Of the 90 other files the two segments write, 85 are byte-identical. The other 5 differ only as
+  expected:
+  - the three `pipeline/onset_*.py` copies are the edited wrappers;
+  - `serving_stage/INPUT_MANIFEST.json` records the run-tree path, the hash of the edited
+    `prepare.py` and its own wall time;
+  - `onset/production/manifest.json` records its creation time.
+
+**Task 2 only, one split** (`--splits private`).
+
+- Every Task 2 step ran on the private split alone.
+- The private rows of the onset and ongoing sources (43,500 each) are identical to the private rows
+  of the §1 files.
+- Assembly then stopped at the new coverage check: "87000 of 174,000 queue rows not covered". The
+  released key also lists the validation rows, so this stop is the intended result.
+
+**Assembly.**
+
+- The edited `pipeline/assemble.py`, run on the §1 final sources, gives SHA256 `cf5869e2…0fc5`:
+  **MATCH**.
+- With one ongoing row removed, it stops: "1 of 174,000 queue rows not covered".
+

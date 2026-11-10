@@ -3,10 +3,14 @@
   python assemble.py --data <kaggle_public> --out submission.csv \
       --state A.parquet --state B.parquet ...   (applied in order; a later file overrides an earlier one)
       --onset onset.parquet --ongoing ongoing.parquet --odme odme.parquet [--expect-sha <sha256>]
+  python assemble.py --data <kaggle_public> --out submission.csv --queue-only \
+      --onset onset.parquet --ongoing ongoing.parquet
 
 State files: submission_id, speed_kmh, flow_vph. Every state row must be covered.
-Queue files: submission_id, queue_pred (0/1). Queue rows not listed are 0.
+Queue files: submission_id, queue_pred (0/1). Every queue row must be covered, by exactly one file.
 OD file:     submission_id, path_flow. Every odme row must be covered.
+--queue-only (Task 2 only): no state or OD file is read; state and odme rows print 0.0 and 0,
+so the file keeps the full submission layout with only the queue rows predicted.
 
 Number format, the same as the delivered file:
 - state speed/flow: round to 3 decimals, printed with exactly 3 decimals;
@@ -45,9 +49,14 @@ def main():
     ap.add_argument("--state", action="append", default=[])
     ap.add_argument("--onset", required=True)
     ap.add_argument("--ongoing", required=True)
-    ap.add_argument("--odme", required=True)
+    ap.add_argument("--odme")
+    ap.add_argument("--queue-only", action="store_true")
     ap.add_argument("--expect-sha")
     a = ap.parse_args()
+    if a.queue_only and (a.state or a.odme):
+        ap.error("--queue-only takes no --state or --odme")
+    if not a.queue_only and not (a.state and a.odme):
+        ap.error("--state and --odme are required (or pass --queue-only)")
     out = Path(a.out)
     if out.exists():
         sys.exit(f"refusing to overwrite {out}")
@@ -68,10 +77,11 @@ def main():
         v[ii] = np.round(d.speed_kmh.to_numpy(np.float64), 3)
         q[ii] = np.round(d.flow_vph.to_numpy(np.float64), 3)
     st = sid[task == "state"]
-    miss = int((~np.isfinite(v[st]) | ~np.isfinite(q[st])).sum())
-    assert miss == 0, f"{miss} state rows not covered by the state sources"
+    if not a.queue_only:
+        miss = int((~np.isfinite(v[st]) | ~np.isfinite(q[st])).sum())
+        assert miss == 0, f"{miss} state rows not covered by the state sources"
 
-    # Queue: 0/1 per row; onset and ongoing files cover disjoint rows, unlisted rows stay 0.
+    # Queue: 0/1 per row; onset and ongoing files cover disjoint rows, together every queue row.
     qp = np.zeros(n, np.int8); seen = np.zeros(n, bool)
     for p in (a.onset, a.ongoing):
         d = pd.read_parquet(p, columns=["submission_id", "queue_pred"])
@@ -81,20 +91,27 @@ def main():
         vals = d.queue_pred.to_numpy()
         assert set(np.unique(vals)) <= {0, 1}
         qp[ii] = vals; seen[ii] = True
+    # Coverage: a queue row that neither file lists would otherwise be written as 0 silently.
+    qr = sid[task == "queue"]
+    miss = int((~seen[qr]).sum())
+    assert miss == 0, f"{miss} of {len(qr):,} queue rows not covered by the onset and ongoing sources"
 
     # OD: path flows rounded to 4 decimals; every odme row must be covered.
     pf = np.full(n, np.nan)
-    d = pd.read_parquet(a.odme, columns=["submission_id", "path_flow"])
-    ii = d.submission_id.to_numpy(np.int64)
-    pf[ii] = np.round(d.path_flow.to_numpy(np.float64), 4)
-    od = sid[task == "odme"]
-    assert np.isfinite(pf[od]).all(), "odme rows not covered"
+    if not a.queue_only:
+        d = pd.read_parquet(a.odme, columns=["submission_id", "path_flow"])
+        ii = d.submission_id.to_numpy(np.int64)
+        pf[ii] = np.round(d.path_flow.to_numpy(np.float64), 4)
+        od = sid[task == "odme"]
+        assert np.isfinite(pf[od]).all(), "odme rows not covered"
 
     # Mode "x" creates the file and fails if it already exists.
     with open(out, "x") as f:
         f.write(HEADER)
         for s, t in zip(sid.tolist(), task.tolist()):
-            if t == "state":
+            if a.queue_only and t in ("state", "odme"):
+                f.write(f"{s},{t},0.0,0.0,0,0.0\n")
+            elif t == "state":
                 f.write(f"{s},state,{v[s]:.3f},{q[s]:.3f},0,0.0\n")
             elif t == "queue":
                 f.write(f"{s},queue,0.0,0.0,{int(qp[s])},0.0\n")

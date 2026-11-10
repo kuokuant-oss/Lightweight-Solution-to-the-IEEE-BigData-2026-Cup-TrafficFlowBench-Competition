@@ -8,7 +8,10 @@ exactly as r16b_bits() maps the CSV column, and saves the same structure: int8 a
 """
 # Runs in pipeline/ongoing.sh ("r16b_bits"), after serving_stage/prepare.py.
 # Output: R16b_ongoing_bits.npz (int8 decision per SUBMISSION_MAP row).
+import os
 import numpy as np, pandas as pd
+# Package edit (2026-11-10): the split list comes from TFB_SPLITS (default 'validation private', see README).
+SPLITS = tuple(os.environ.get('TFB_SPLITS', 'validation private').split())
 from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
@@ -19,9 +22,9 @@ path = HERE / 'R16b_ongoing_bits.npz'
 assert not path.exists(), path
 d = pd.read_parquet(D1, columns=['submission_id', 'split', 'd1'])
 q = dict(zip(d.submission_id.astype(np.int64), d.d1.astype(int)))
-assert len(q) == len(d) == 87000
+assert len(q) == len(d) == 43500 * len(SPLITS)
 bits = {}
-for s in ('validation', 'private'):
+for s in SPLITS:
     m = pd.read_parquet(SS / f'{s}_SUBMISSION_MAP.parquet')
     b = np.full(len(m), -1, np.int8)
     for i, sid in enumerate(m.submission_id.to_numpy()):

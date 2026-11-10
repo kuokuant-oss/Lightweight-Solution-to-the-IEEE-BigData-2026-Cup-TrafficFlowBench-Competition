@@ -20,6 +20,8 @@ ROOT = Path(os.environ['TFB_REPO_ROOT'])
 REL = RUN / 'tfb_competition_data' / 'kaggle_public'
 SRC = ROOT / 'build/review_20260925/round2/synthesis/onset_FEA1_official.parquet'
 DEST = RUN / 'final_sources' / 'onset.parquet'
+# Package edit (2026-11-10): the split list comes from TFB_SPLITS (default 'validation private', see README).
+SPLITS = tuple(os.environ.get('TFB_SPLITS', 'validation private').split())
 # A Task 2 queue row is identified by window, 5-minute timestamp and link.
 KEY = ['window_id', 'timestamp', 'link_id']
 
@@ -36,11 +38,11 @@ def main():
         raise SystemExit(f'refusing to overwrite {DEST}')
     f = pd.read_parquet(SRC)
     f['link_id'] = f.link_id.astype(str)
-    assert len(f) == 14500 and not f.duplicated(KEY).any() and set(np.unique(f.prob)) <= {0.0, 1.0}
+    assert len(f) == 7250 * len(SPLITS) and not f.duplicated(KEY).any() and set(np.unique(f.prob)) <= {0.0, 1.0}
     # Onset windows of both official splits, from the released window indexes (macOS ._ files skipped).
     onset = set()
     for p in sorted((REL / 'task2').glob('*/*/window_index.csv')):
-        if p.name.startswith('._') or p.parent.name not in ('validation', 'private'):
+        if p.name.startswith('._') or p.parent.name not in SPLITS:
             continue
         w = pd.read_csv(p)
         onset |= set(w.loc[w.condition.eq('queue_onset'), 'window_id'].astype(str))
