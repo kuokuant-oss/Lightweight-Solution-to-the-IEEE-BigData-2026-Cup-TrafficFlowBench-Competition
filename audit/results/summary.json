@@ -1,0 +1,30 @@
+{
+ "cuts": 12,
+ "windows": 1216,
+ "cells": 1342530,
+ "changed": 0,
+ "wall_s": 4786,
+ "controls": [
+  {
+   "name": "n02",
+   "window": "Q2_D7_I405_S_validation_005",
+   "at_cut_cells": 654,
+   "at_cut_changed": 0,
+   "earlier_changed": 0
+  },
+  {
+   "name": "n04",
+   "window": "Q2_D12_I5_S_validation_010",
+   "at_cut_cells": 600,
+   "at_cut_changed": 0,
+   "earlier_changed": 0
+  },
+  {
+   "name": "n07",
+   "window": "Q2_D7_I210_W_private_010",
+   "at_cut_cells": 486,
+   "at_cut_changed": 3,
+   "earlier_changed": 0
+  }
+ ]
+}

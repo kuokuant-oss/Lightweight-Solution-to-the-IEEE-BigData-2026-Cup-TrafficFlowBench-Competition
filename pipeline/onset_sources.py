@@ -38,7 +38,8 @@ def main():
         raise SystemExit(f'refusing to overwrite {DEST}')
     f = pd.read_parquet(SRC)
     f['link_id'] = f.link_id.astype(str)
-    assert len(f) == 7250 * len(SPLITS) and not f.duplicated(KEY).any() and set(np.unique(f.prob)) <= {0.0, 1.0}
+    # Package edit (2026-11-10): row and window counts follow window_index.csv instead of the fixed 5-window layout.
+    assert not f.duplicated(KEY).any() and set(np.unique(f.prob)) <= {0.0, 1.0}
     # Onset windows of both official splits, from the released window indexes (macOS ._ files skipped).
     onset = set()
     for p in sorted((REL / 'task2').glob('*/*/window_index.csv')):
@@ -50,6 +51,7 @@ def main():
     # Every queue row of an onset window; rows without a stage1 decision (steps 1-5) become 0.
     key = pd.read_csv(REL / 'submission_key.csv', usecols=['submission_id', 'task'] + KEY, dtype=str)
     q = key[key.task.eq('queue') & key.window_id.isin(onset)]
+    assert len(q) == 6 * len(f), 'an onset window has 6 queue rows per stage1 (step-6) decision'
     k = q.merge(f, on=KEY, how='left', validate='one_to_one')
     assert int(k.prob.notna().sum()) == len(f), 'not every stage1 decision maps to a submission row'
     out = pd.DataFrame({'submission_id': k.submission_id.astype(np.int64).to_numpy(),

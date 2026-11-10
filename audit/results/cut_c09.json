@@ -1,0 +1,45 @@
+{
+ "name": "c09",
+ "window_id": "Q2_D7_I405_N_private_010",
+ "tau": "2031-04-04T06:20Z",
+ "splits": "validation private",
+ "strict": false,
+ "note": "10th ongoing window of D7_I405_N in April",
+ "windows": 125,
+ "onset_windows": 65,
+ "ongoing_windows": 60,
+ "cells": 141744,
+ "changed": 0,
+ "missing": 0,
+ "extra": 0,
+ "at_cut_cells": 2112,
+ "at_cut_changed": 0,
+ "wall_s": 353,
+ "changed_windows": [],
+ "onset": {
+  "windows": 65,
+  "cells": 74154,
+  "changed": 0,
+  "missing": 0,
+  "extra": 0,
+  "queued": 247,
+  "at_cut_windows": [],
+  "at_cut_cells": 0,
+  "at_cut_changed": 0,
+  "changed_windows": []
+ },
+ "ongoing": {
+  "windows": 60,
+  "cells": 67590,
+  "changed": 0,
+  "missing": 0,
+  "extra": 0,
+  "queued": 8164,
+  "at_cut_windows": [
+   "Q2_D7_I405_N_private_010"
+  ],
+  "at_cut_cells": 2112,
+  "at_cut_changed": 0,
+  "changed_windows": []
+ }
+}

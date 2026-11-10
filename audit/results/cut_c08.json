@@ -1,0 +1,45 @@
+{
+ "name": "c08",
+ "window_id": "Q2_D12_I5_N_private_006",
+ "tau": "2031-04-03T18:20Z",
+ "splits": "validation private",
+ "strict": false,
+ "note": "1st ongoing window of D12_I5_N in April",
+ "windows": 119,
+ "onset_windows": 63,
+ "ongoing_windows": 56,
+ "cells": 132594,
+ "changed": 0,
+ "missing": 0,
+ "extra": 0,
+ "at_cut_cells": 1548,
+ "at_cut_changed": 0,
+ "wall_s": 335,
+ "changed_windows": [],
+ "onset": {
+  "windows": 63,
+  "cells": 71886,
+  "changed": 0,
+  "missing": 0,
+  "extra": 0,
+  "queued": 238,
+  "at_cut_windows": [],
+  "at_cut_cells": 0,
+  "at_cut_changed": 0,
+  "changed_windows": []
+ },
+ "ongoing": {
+  "windows": 56,
+  "cells": 60708,
+  "changed": 0,
+  "missing": 0,
+  "extra": 0,
+  "queued": 6966,
+  "at_cut_windows": [
+   "Q2_D12_I5_N_private_006"
+  ],
+  "at_cut_cells": 1548,
+  "at_cut_changed": 0,
+  "changed_windows": []
+ }
+}

@@ -1,0 +1,45 @@
+{
+ "name": "c04",
+ "window_id": "Q2_D12_I5_S_validation_010",
+ "tau": "2031-03-06T15:20Z",
+ "splits": "validation",
+ "strict": false,
+ "note": "10th ongoing window of D12_I5_S in March",
+ "windows": 72,
+ "onset_windows": 39,
+ "ongoing_windows": 33,
+ "cells": 77334,
+ "changed": 0,
+ "missing": 0,
+ "extra": 0,
+ "at_cut_cells": 600,
+ "at_cut_changed": 0,
+ "wall_s": 297,
+ "changed_windows": [],
+ "onset": {
+  "windows": 39,
+  "cells": 41952,
+  "changed": 0,
+  "missing": 0,
+  "extra": 0,
+  "queued": 146,
+  "at_cut_windows": [],
+  "at_cut_cells": 0,
+  "at_cut_changed": 0,
+  "changed_windows": []
+ },
+ "ongoing": {
+  "windows": 33,
+  "cells": 35382,
+  "changed": 0,
+  "missing": 0,
+  "extra": 0,
+  "queued": 4843,
+  "at_cut_windows": [
+   "Q2_D12_I5_S_validation_010"
+  ],
+  "at_cut_cells": 600,
+  "at_cut_changed": 0,
+  "changed_windows": []
+ }
+}

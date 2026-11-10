@@ -57,7 +57,9 @@ if __name__ == '__main__':
     out = a_block_decode()
     # 87,000 rows: every official ongoing (window, link, timestamp) cell of
     # validation and private.
-    assert len(out) == 43500 * len(SPLITS) and not out[['window_id', 'timestamp', 'link_id']].duplicated().any()
+    # Package edit (2026-11-10): row and window counts follow window_index.csv instead of the fixed 5-window layout.
+    # serve_refit.py joins it one to one with the CTM serving rows and asserts full coverage.
+    assert not out[['window_id', 'timestamp', 'link_id']].duplicated().any()
     OUT.parent.mkdir(exist_ok=True); assert not OUT.exists(), OUT
     out.to_parquet(OUT, index=False)
     w = out.groupby(['split', 'window_id']).queue_pred.sum()

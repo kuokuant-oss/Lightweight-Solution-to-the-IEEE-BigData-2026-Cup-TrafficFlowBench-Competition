@@ -26,6 +26,20 @@ import gc,time,resource,itertools
 # longer reads them (package edit).
 EXPECTED_PARENT_SHA='05cebca599b04cba99802d2f97ab2a2145e6992cc3af12fa77c415a5770c5d64'
 PARENT=ROOT/'build/deliverables/2026-09-30/submission_R16b_R11c_CAPDENS_C85.csv'
+# Package edit (2026-11-10): PublishedPanel.day (e_data.py, pinned by INPUT_MANIFEST.json, so not edited)
+# also asserted that a masked day file holds all 288 slots of every link. A day file whose rows after
+# the forecast origin were removed then stopped the run. This copy of day() is the same except that
+# assert: rows are placed in the links x 288 grid by timestamp and absent cells stay NaN, as before.
+# Its readers (encode, legal_frame, source_poison) use the slots up to T only.
+def _published_day(self,path,truth=False):
+    cols=['timestamp','link_id']+FIELDS+['is_score_eligible']
+    d=pd.read_parquet(path,columns=cols);rr=d.link_id.astype(str).map(self.li).to_numpy();ts=pd.to_datetime(d.timestamp,utc=True);cc=(ts.dt.hour*12+ts.dt.minute//5).to_numpy()
+    assert np.isfinite(rr).all() and not d[['timestamp','link_id']].duplicated().any() and len(d)<=len(self.links)*288
+    out={}
+    for c in FIELDS+['is_score_eligible']:
+        a=np.full((len(self.links),288),np.nan);a[rr,cc]=d[c].to_numpy();out[c]=a.astype(bool)if c=='is_score_eligible'else a
+    return out
+PublishedPanel.day=_published_day
 # Package edit (2026-11-10): the split list comes from TFB_SPLITS (default 'validation private', see README).
 SPLITS = tuple(os.environ.get('TFB_SPLITS', 'validation private').split())
 def indexes():
@@ -41,11 +55,12 @@ def indexes():
         for panel in PANELS:
             path=D.R.RELEASE/f'task2/{panel}/{split}/window_index.csv'
             w=pd.read_csv(path,usecols=['window_id','panel','split','date','forecast_origin','condition'])
-            w=w[w.condition.eq('queue_ongoing')].copy();assert len(w)==5 and(w.panel==panel).all()and(w.split==split).all()
+            # Package edit (2026-11-10): row and window counts follow window_index.csv instead of the fixed 5-window layout.
+            w=w[w.condition.eq('queue_ongoing')].copy();assert (w.panel==panel).all()and(w.split==split).all()
             w['origin']=pd.to_datetime(w.forecast_origin,utc=True);w['T']=w.origin.dt.hour*12+w.origin.dt.minute//5
             assert(w['T'].between(12,281)).all()and w.date.equals(w.origin.dt.strftime('%Y-%m-%d'))
             assert w.window_id.is_unique;records.append(w);source[str(path)]=sha(path)
-    idx=pd.concat(records,ignore_index=True);assert len(idx)==40*len(SPLITS) and idx.window_id.is_unique;return idx,source
+    idx=pd.concat(records,ignore_index=True);assert idx.window_id.is_unique;return idx,source
 def submission_binding(windows):
     """Maps the queue rows of the official windows to their submission ids.
 
@@ -72,7 +87,7 @@ def submission_binding(windows):
         take=d.task.eq('queue')&d.window_id.isin(wanted);g=d[take].copy();g['submission_row_index']=offset+np.flatnonzero(take)
         if len(g):parts.append(g)
         assert np.array_equal(d.submission_id.to_numpy(),np.arange(offset+1,offset+len(d)+1));offset+=len(d)
-    assert offset==rows;mapping=pd.concat(parts,ignore_index=True);assert len(mapping)==43500*len(SPLITS) and mapping.submission_id.is_unique
+    assert offset==rows;mapping=pd.concat(parts,ignore_index=True);assert mapping.submission_id.is_unique
     assert set(mapping.window_id)==wanted
     # Sample and R16b task/ID rows were identical; queue targetkeys are read ONLY
     # for output mapping and are never passed to a feature/encoder function.
@@ -94,9 +109,9 @@ def run():
     spec=json.loads((Q/'TRANSFORM_base196.json').read_text());assert sha(Q/'TRANSFORM_base196.json')==core['base_transform_sha256']
     sourcefiles=dict(indexhash);records={};audits=[];profiles=[];recency_sources=[];ramp_sources=[]
     for split in SPLITS:
-        # n = 43,500 rows per split: links of the 8 panels x 6 horizon steps x
-        # 5 windows.
-        win=windows[windows.split.eq(split)].copy();n=sum(len(strict[p]['links'])*6*5 for p in PANELS);assert n==43500
+        # n rows per split: links x 6 horizon steps x ongoing windows, summed over the 8 panels
+        # (43,500 for the released 5 windows per panel). Package edit (2026-11-10): from window_index.
+        win=windows[windows.split.eq(split)].copy();n=sum(len(strict[p]['links'])*6*int(win.panel.eq(p).sum()) for p in PANELS)
         basepath=HERE/f'{split}_base98.npy';encpath=HERE/f'{split}_encoder.npy';assert not basepath.exists()and not encpath.exists()
         base=np.lib.format.open_memmap(basepath,mode='w+',dtype=np.float64,shape=(n,98));enc=np.lib.format.open_memmap(encpath,mode='w+',dtype=np.float32,shape=(n//6,4,9,13))
         rows=[];centers=[];roff=coff=0
@@ -110,6 +125,7 @@ def run():
             # Per window: history = the released window_history (slots T-12..T-1);
             # features from direct.Context.features (legal_frame); encoder input
             # from PublishedPanel.encode.
+            raw=h=None  # package edit (2026-11-10): a panel without ongoing windows in this split skips the loop
             for i,w in enumerate(win[win.panel.eq(panel)].itertuples()):
                 origin=pd.Timestamp(w.origin);T=int(w.T);raw=P.day(P.published[w.date]);sourcefiles[str(P.published[w.date])]=sha(P.published[w.date])
                 h=P.own_history(w.window_id,origin);assert h is not None
@@ -147,7 +163,7 @@ def run():
             del P,c,raw,h;D.REC.day_q.cache_clear();gc.collect()
         assert roff==n and coff==n//6;base.flush();base._mmap.close();enc.flush();enc._mmap.close();del base,enc
         ri=pd.concat(rows,ignore_index=True);ci=pd.concat(centers,ignore_index=True)
-        assert len(ri)==43500 and ri.window_id.nunique()==40 and not ri[['window_id','link_id','step']].duplicated().any()
+        assert len(ri)==n and ri.window_id.nunique()==len(win) and not ri[['window_id','link_id','step']].duplicated().any()
         assert np.array_equal(ri.physical_row,np.arange(len(ri)))and np.array_equal(ci.center_row,np.arange(len(ci)))
         assert np.array_equal(pd.MultiIndex.from_frame(ci.loc[ri.center,['window_id','link_id']]),pd.MultiIndex.from_frame(ri[['window_id','link_id']]))
         ri.to_parquet(HERE/f'{split}_ROW_INDEX.parquet',index=False);ci.to_parquet(HERE/f'{split}_CENTER_INDEX.parquet',index=False)
@@ -155,20 +171,20 @@ def run():
         x=np.load(basepath,mmap_mode='r');outpath=HERE/f'{split}_base196.npy';out=np.lib.format.open_memmap(outpath,mode='w+',dtype=np.float32,shape=(n,196))
         for begin in range(0,n,20000):v=transform_block(x[begin:begin+20000],spec);out[begin:begin+len(v)]=v
         out.flush();out._mmap.close();x._mmap.close();del x,out
-        files=[basepath,encpath,outpath,HERE/f'{split}_ROW_INDEX.parquet',HERE/f'{split}_CENTER_INDEX.parquet'];records[split]=dict(rows=n,centers=coff,windows=40,files={str(p):sha(p)for p in files})
+        files=[basepath,encpath,outpath,HERE/f'{split}_ROW_INDEX.parquet',HERE/f'{split}_CENTER_INDEX.parquet'];records[split]=dict(rows=n,centers=coff,windows=len(win),files={str(p):sha(p)for p in files})
         print('SERVING_INPUTS_PHYSICAL_READY',split,n,coff,'seconds',round(time.time()-start,1),flush=True)
     # Output membership is assigned only AFTER both physical source grids exist.
     mapping,binding=submission_binding(windows)
     for split in records:
         ri=pd.read_parquet(HERE/f'{split}_ROW_INDEX.parquet');m=mapping[mapping.split.eq(split)].copy();m['timestamp']=pd.to_datetime(m.timestamp,utc=True)
         joined=ri.merge(m,on=['window_id','panel','split','link_id','timestamp'],how='left',validate='one_to_one',sort=False)
-        assert len(joined)==43500 and joined.submission_id.notna().all()and joined.submission_id.is_unique
+        assert len(joined)==records[split]['rows'] and joined.submission_id.notna().all()and joined.submission_id.is_unique
         assert np.array_equal(joined.physical_row,ri.physical_row)and joined.task.eq('queue').all()
         assert len(m)==len(joined);joined['submission_id']=joined.submission_id.astype(np.int64);joined['submission_row_index']=joined.submission_row_index.astype(np.int64)
         path=HERE/f'{split}_SUBMISSION_MAP.parquet';joined.to_parquet(path,index=False);records[split]['files'][str(path)]=sha(path)
     windows.to_parquet(HERE/'WINDOWS.parquet',index=False)
     code=[Path(__file__),HERE/'PREREG.json',Q/'prepare_march.py',Q/'e_data.py',Q/'public_operator.py',Q/'transform.py',Q/'common.py']
-    result=dict(PASS=True,status='GENUINE_SERVING_INPUT_ONLY; NO_INFERENCE_NO_CSV_NO_OUTCOMES',records=records,total_windows=80,total_physical_rows=87000,
+    result=dict(PASS=True,status='GENUINE_SERVING_INPUT_ONLY; NO_INFERENCE_NO_CSV_NO_OUTCOMES',records=records,total_windows=len(windows),total_physical_rows=sum(r['rows'] for r in records.values()),
         source_hashes=sourcefiles,submission_binding=binding,code_hashes={str(p):sha(p)for p in code},input_manifest_sha256=sha(Q/'INPUT_MANIFEST.json'),
         frozen_joint_inference_manifest_sha256=sha(Q.parent/'INFERENCE_MANIFEST.json'),base_transform_sha256=sha(Q/'TRANSFORM_base196.json'),strict_blocks_sha256=sha(BLOCKS),
         window_index_sha256=sha(HERE/'WINDOWS.parquet'),causal_audits=audits,profiles=profiles,recency_sources=recency_sources,ramp_sources=ramp_sources,

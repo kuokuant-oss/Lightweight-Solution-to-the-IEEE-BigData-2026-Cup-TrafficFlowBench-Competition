@@ -39,7 +39,7 @@ def base_of(split):
     """Returns the 98 base features (memory-mapped) and the row index of one split."""
     b = np.load(SS / f"{split}_base98.npy", mmap_mode="r")
     ri = pd.read_parquet(SS / f"{split}_ROW_INDEX.parquet")
-    assert len(b) == len(ri) == 43500
+    assert len(b) == len(ri)  # package edit (2026-11-10): was == 43500 (the released 5-window layout)
     return b, ri
 
 

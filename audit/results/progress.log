@@ -1,0 +1,51 @@
+[2026-11-10 17:20:49] c01 start
+[2026-11-10 17:20:49] c02 start
+[2026-11-10 17:20:49] c03 start
+[2026-11-10 17:24:32] c01 done tau 2031-03-04T11:30Z windows 52 cells 56466 changed 0 at_cut 0/486 wall 222 s
+[2026-11-10 17:24:32] c04 start
+[2026-11-10 17:24:53] c02 done tau 2031-03-05T07:10Z windows 63 cells 68934 changed 0 at_cut 0/654 wall 243 s
+[2026-11-10 17:24:53] c05 start
+[2026-11-10 17:25:14] c03 done tau 2031-03-06T13:50Z windows 71 cells 76734 changed 0 at_cut 0/876 wall 264 s
+[2026-11-10 17:25:15] c06 start
+[2026-11-10 17:29:30] c04 done tau 2031-03-06T15:20Z windows 72 cells 77334 changed 0 at_cut 0/600 wall 297 s
+[2026-11-10 17:29:31] c07 start
+[2026-11-10 17:29:53] c05 done tau 2031-03-07T12:55Z windows 73 cells 78882 changed 0 at_cut 0/1548 wall 297 s
+[2026-11-10 17:29:53] c08 start
+[2026-11-10 17:30:36] c06 done tau 2031-03-12T14:10Z windows 80 cells 87000 changed 0 at_cut 0/1548 wall 320 s
+[2026-11-10 17:30:36] c09 start
+[2026-11-10 17:34:57] c07 done tau 2031-04-03T12:30Z windows 114 cells 128274 changed 0 at_cut 0/486 wall 325 s
+[2026-11-10 17:34:57] c10 start
+[2026-11-10 17:35:29] c08 done tau 2031-04-03T18:20Z windows 119 cells 132594 changed 0 at_cut 0/1548 wall 335 s
+[2026-11-10 17:35:29] c11 start
+[2026-11-10 17:36:30] c09 done tau 2031-04-04T06:20Z windows 125 cells 141744 changed 0 at_cut 0/2112 wall 353 s
+[2026-11-10 17:36:31] c12 start
+[2026-11-10 17:41:17] c10 done tau 2031-04-05T13:25Z windows 139 cells 156120 changed 0 at_cut 0/600 wall 379 s
+[2026-11-10 17:41:17] n02 start
+[2026-11-10 17:42:07] c11 done tau 2031-04-07T07:10Z windows 148 cells 164448 changed 0 at_cut 0/654 wall 396 s
+[2026-11-10 17:42:07] n04 start
+[2026-11-10 17:43:45] c12 done tau 2031-04-17T15:15Z windows 160 cells 174000 changed 0 at_cut 0/642 wall 433 s
+[2026-11-10 17:43:45] n07 start
+[2026-11-10 17:44:39] n02 done tau 2031-03-05T07:10Z windows 63 cells 68934 changed 0 at_cut 0/654 wall 200 s
+[2026-11-10 17:45:30] n04 done tau 2031-03-06T15:20Z windows 72 cells 77334 changed 0 at_cut 0/600 wall 202 s
+[2026-11-10 17:47:41] n07 done tau 2031-04-03T12:30Z windows 114 cells 128274 changed 3 at_cut 3/486 wall 236 s
+[2026-11-10 17:49:52] second pass: c03 c07 c12 n02 n04 n07 n02b rerun with probability comparison
+[2026-11-10 17:49:52] c07 start
+[2026-11-10 17:49:52] c03 start
+[2026-11-10 17:49:52] c12 start
+[2026-11-10 17:53:29] c03 done tau 2031-03-06T13:50Z windows 71 cells 76734 changed 0 at_cut 0/876 wall 216 s | probs 1092226 values, before τ changed 0 max 0, at τ changed 0/27156 max 0
+[2026-11-10 17:53:30] n02 start
+[2026-11-10 17:55:49] c07 done tau 2031-04-03T12:30Z windows 114 cells 128274 changed 0 at_cut 0/486 wall 356 s | probs 1791678 values, before τ changed 0 max 0, at τ changed 0/15066 max 0
+[2026-11-10 17:55:50] n04 start
+[2026-11-10 17:56:11] n07 start
+[2026-11-10 17:56:13] n02b start
+[2026-11-10 18:02:59] c12 n02 n04 n07 n02b of the second pass stopped when the drive filled up (no space left); rerun 2 at a time
+[2026-11-10 18:02:59] c12 start
+[2026-11-10 18:02:59] n02 start
+[2026-11-10 18:07:56] n02 done tau 2031-03-05T07:10Z windows 63 cells 68934 changed 0 at_cut 0/654 wall 282 s | probs 943162 values, before τ changed 0 max 0, at τ changed 218/218 max 0.139
+[2026-11-10 18:07:56] n04 start
+[2026-11-10 18:12:20] c12 done tau 2031-04-17T15:15Z windows 160 cells 174000 changed 0 at_cut 0/642 wall 545 s | probs 2726000 values, before τ changed 0 max 0, at τ changed 0/19902 max 0
+[2026-11-10 18:12:20] n07 start
+[2026-11-10 18:12:31] n04 done tau 2031-03-06T15:20Z windows 72 cells 77334 changed 0 at_cut 0/600 wall 261 s | probs 1110826 values, before τ changed 0 max 0, at τ changed 18600/18600 max 0.212
+[2026-11-10 18:12:32] n02b start
+[2026-11-10 18:13:35] n02b refused: serve_official.official_rows asserts the window history covers T-60..T-5 (see n02b_refused.log); removed from cuts.csv
+[2026-11-10 18:17:10] n07 done tau 2031-04-03T12:30Z windows 114 cells 128274 changed 3 at_cut 3/486 wall 284 s | probs 1791678 values, before τ changed 0 max 0, at τ changed 15066/15066 max 0.328

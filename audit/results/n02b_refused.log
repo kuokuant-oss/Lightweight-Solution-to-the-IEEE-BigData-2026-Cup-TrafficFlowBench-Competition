@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/Volumes/X9-2TB/tfb_cold_runs/audit/trunc-5/out_n02b/run/trafficflowbench/scripts/ssd_runtime.py", line 350, in main
+    _NATIVE_EXEC(compiler(script.read_bytes(), str(script), 'exec', dont_inherit=True), scope)
+  File "/Volumes/X9-2TB/tfb_cold_runs/audit/trunc-5/out_n02b/run/trafficflowbench/pipeline/onset_c3.py", line 76, in <module>
+    main()
+  File "/Volumes/X9-2TB/tfb_cold_runs/audit/trunc-5/out_n02b/run/trafficflowbench/pipeline/onset_c3.py", line 57, in main
+    offi = official_rows(split)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/Volumes/X9-2TB/tfb_cold_runs/audit/trunc-5/out_n02b/run/trafficflowbench/build/review_20260924_ctm/ruler/onset_site/serve_official.py", line 93, in official_rows
+    assert c.max() == T - 1 and c.min() == T - 12, (w.window_id, c.min(), c.max(), T)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ('Q2_D7_I405_S_validation_005', np.int32(74), np.int32(84), 86)
+        3.54 real         3.08 user         0.31 sys

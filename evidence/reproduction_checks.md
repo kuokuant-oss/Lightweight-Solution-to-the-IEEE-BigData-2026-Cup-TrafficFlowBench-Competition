@@ -118,3 +118,26 @@ gave `submission.csv` with 6,980,503 rows and SHA256
   **MATCH**.
 - With one ongoing row removed, it stops: "1 of 174,000 queue rows not covered".
 
+
+## 5. Task 2 truncation audit (2026-11-10)
+
+`audit/RESULTS.md` has the method, the full tables and the commands. In short:
+
+- **12 cuts** in March and April, at onset and ongoing windows, including the last window of each
+  split. Each cut deletes every observation stamped after a window's origin τ. All 1,216 compared
+  windows (1,342,530 queue cells) keep their decisions.
+- **Probabilities.** In 3 cuts every probability was compared: all 5,609,904 values are identical to
+  the full run (max |Δp| = 0).
+- **Negative controls.** Three controls also remove the stamp at τ. Every probability of the window
+  at τ changes (max |Δp| 0.139, 0.212 and 0.328), and in one control 3 decisions change. Earlier
+  windows stay identical.
+- **No refit.** A probe in every Python process of a Task 2 run records no call of a lightgbm,
+  scikit-learn, catboost, scipy.optimize or torch fitting routine. Every model is loaded from its
+  frozen file.
+
+Four length and completeness checks stopped Task 2 on the truncated data. They were relaxed (see
+`CHANGES_FROM_ORIGINAL.md`). After that change, a default `run_reproduce.sh --task2-only` on the
+released data gives `onset.parquet` `bd0bb6d4…980f` and `ongoing.parquet` `4c3d75c4…36eb`. These are
+byte-identical to the full run of §1 and §4, and all 174,000 queue rows equal the submitted file. Of
+the 90 other files the segments write, 86 are byte-identical; the other 4 are two edited wrapper
+copies and two manifests that record run paths, code hashes and times.

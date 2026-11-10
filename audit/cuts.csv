@@ -1,0 +1,16 @@
+name,window_id,drop_stamps,note
+c01,Q2_D7_I210_W_validation_005,0,5th (last) onset window of D7_I210_W in March
+c02,Q2_D7_I405_S_validation_005,0,5th onset window of D7_I405_S (multi-site panel) in March
+c03,Q2_D7_I10_E_validation_010,0,10th (last) ongoing window of D7_I10_E in March
+c04,Q2_D12_I5_S_validation_010,0,10th ongoing window of D12_I5_S in March
+c05,Q2_D12_I5_N_validation_005,0,5th onset window of D12_I5_N (multi-site panel) in March
+c06,Q2_D12_I5_N_validation_010,0,last window of the validation split
+c07,Q2_D7_I210_W_private_010,0,10th ongoing window of D7_I210_W in April
+c08,Q2_D12_I5_N_private_006,0,1st ongoing window of D12_I5_N in April
+c09,Q2_D7_I405_N_private_010,0,10th ongoing window of D7_I405_N in April
+c10,Q2_D12_I5_S_private_005,0,5th onset window of D12_I5_S (multi-site panel) in April
+c11,Q2_D7_I405_S_private_005,0,5th onset window of D7_I405_S (multi-site panel) in April
+c12,Q2_D7_I10_W_private_010,0,last window of the private split
+n02,Q2_D7_I405_S_validation_005,1,negative control: c02 with the rows stamped at the cut also removed
+n04,Q2_D12_I5_S_validation_010,1,negative control: c04 with the rows stamped at the cut also removed
+n07,Q2_D7_I210_W_private_010,1,negative control: c07 with the rows stamped at the cut also removed

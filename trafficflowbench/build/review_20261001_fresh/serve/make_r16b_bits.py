@@ -22,7 +22,8 @@ path = HERE / 'R16b_ongoing_bits.npz'
 assert not path.exists(), path
 d = pd.read_parquet(D1, columns=['submission_id', 'split', 'd1'])
 q = dict(zip(d.submission_id.astype(np.int64), d.d1.astype(int)))
-assert len(q) == len(d) == 43500 * len(SPLITS)
+# Package edit (2026-11-10): row and window counts follow window_index.csv instead of the fixed 5-window layout.
+assert len(q) == len(d)
 bits = {}
 for s in SPLITS:
     m = pd.read_parquet(SS / f'{s}_SUBMISSION_MAP.parquet')

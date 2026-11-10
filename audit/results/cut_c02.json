@@ -1,0 +1,45 @@
+{
+ "name": "c02",
+ "window_id": "Q2_D7_I405_S_validation_005",
+ "tau": "2031-03-05T07:10Z",
+ "splits": "validation",
+ "strict": false,
+ "note": "5th onset window of D7_I405_S (multi-site panel) in March",
+ "windows": 63,
+ "onset_windows": 36,
+ "ongoing_windows": 27,
+ "cells": 68934,
+ "changed": 0,
+ "missing": 0,
+ "extra": 0,
+ "at_cut_cells": 654,
+ "at_cut_changed": 0,
+ "wall_s": 243,
+ "changed_windows": [],
+ "onset": {
+  "windows": 36,
+  "cells": 38928,
+  "changed": 0,
+  "missing": 0,
+  "extra": 0,
+  "queued": 134,
+  "at_cut_windows": [
+   "Q2_D7_I405_S_validation_005"
+  ],
+  "at_cut_cells": 654,
+  "at_cut_changed": 0,
+  "changed_windows": []
+ },
+ "ongoing": {
+  "windows": 27,
+  "cells": 30006,
+  "changed": 0,
+  "missing": 0,
+  "extra": 0,
+  "queued": 4578,
+  "at_cut_windows": [],
+  "at_cut_cells": 0,
+  "at_cut_changed": 0,
+  "changed_windows": []
+ }
+}

@@ -18,7 +18,9 @@ for s in SPLITS:
     z = np.load(HERE / f'decisions_BNDT45_{s}.npz')
     parts.append(pd.DataFrame({'submission_id': z['submission_id'].astype(np.int64), 'queue_pred': z['delta'].astype(np.int8)}))
 d = pd.concat(parts, ignore_index=True)
-assert len(d) == 43500 * len(SPLITS) and d.submission_id.is_unique and set(np.unique(d.queue_pred)) <= {0, 1}
+# Package edit (2026-11-10): row and window counts follow window_index.csv instead of the fixed 5-window layout.
+SS = HERE.parents[1] / 'review_20260930_round20/queue_data/serving_stage'
+assert len(d) == sum(len(pd.read_parquet(SS / f'{s}_SUBMISSION_MAP.parquet')) for s in SPLITS) and d.submission_id.is_unique and set(np.unique(d.queue_pred)) <= {0, 1}
 OUT.parent.mkdir(exist_ok=True); assert not OUT.exists(), OUT
 d.to_parquet(OUT, index=False)
 print('wrote', OUT, len(d), 'positives', int(d.queue_pred.sum()))

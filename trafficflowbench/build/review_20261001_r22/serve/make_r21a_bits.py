@@ -18,6 +18,9 @@ R21S = HERE.parents[1] / 'review_20261001_fresh/serve'
 path = HERE / 'R21a_ongoing_bits.npz'
 assert not path.exists(), path
 bits = {s: np.load(R21S / f'decisions_C1f_{s}.npz')['delta'].astype(np.int8) for s in SPLITS}
-assert all(len(b) == 43500 for b in bits.values())
+# Package edit (2026-11-10): row and window counts follow window_index.csv instead of the fixed 5-window layout.
+import pandas as pd
+SS = HERE.parents[1] / 'review_20260930_round20/queue_data/serving_stage'
+assert all(len(b) == len(pd.read_parquet(SS / f'{s}_SUBMISSION_MAP.parquet')) for s, b in bits.items())
 np.savez(path, **bits)
 print({s: (len(b), int(b.sum())) for s, b in bits.items()})

@@ -94,9 +94,9 @@ Assumptions about the new data:
 - `task2/<corridor>/<split>/window_index.csv` and `window_history.parquet` for each split, and the
   masked layer `corridors/<corridor>/<split>/mainline_states_masked/`;
 - `submission_key.csv` and `sample_submission.csv` with the queue rows of those windows;
-- the released window layout: 5 onset and 5 ongoing windows per corridor and split, 6 steps each
-  (T+5 … T+30). Some programs assert the per-split counts that follow from it (for example 43,500
-  ongoing rows and 40 ongoing windows per split).
+- windows of 6 steps each (T+5 … T+30). The number of windows per corridor is read from
+  `window_index.csv`; a corridor may have none in a split. Every window listed in
+  `window_history.parquet` has its full 12-stamp history (T−60 … T−5).
 
 ### Notes
 
@@ -126,6 +126,7 @@ trafficflowbench/          programs and frozen train-only artifacts, at their or
 training/                  the programs that trained the frozen models (record; not run)
 docs/                      method overview and diagrams
 evidence/                  submission record, reproduction and time-rule checks
+audit/                     Task 2 truncation audit (delete everything after T, rerun, compare)
 third_party/               licence texts of the included third-party code
 checksums.txt              SHA256 of every file
 TRAINING.md  CHANGES_FROM_ORIGINAL.md  THIRD_PARTY_NOTICES.md  LICENSE

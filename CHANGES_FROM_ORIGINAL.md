@@ -149,9 +149,9 @@ No model, threshold or decision rule changed. SHA prefixes are package before ->
 - `TFB_SPLITS` (default `validation private`) replaces the split names that were written into the
   Task 2 code. The newworld file tags stay `realval` / `realpriv` for the released splits (other
   splits get `real<split>`), the step-log names stay `*_val` / `*_pri`, and the counts that are
-  totals over both splits are now the per-split count times the number of splits. The per-split
-  counts of the window layout (43,500 ongoing rows, 40 ongoing windows, 7,250 onset step-6 rows)
-  are unchanged. Each edited Python file is marked `Package edit (2026-11-10)`.
+  totals over both splits are now the per-split count times the number of splits. (The per-split
+  counts were then taken from `window_index.csv`; see "Task 2 truncation audit" below.) Each edited
+  Python file is marked `Package edit (2026-11-10)`.
 
 | File | SHA prefix |
 |---|---|
@@ -174,3 +174,27 @@ No model, threshold or decision rule changed. SHA prefixes are package before ->
 
 None of these files is pinned by a training manifest. The 26 pinned files listed above keep their
 bytes.
+
+## Task 2 truncation audit (2026-11-10)
+
+`audit/` reruns Task 2 on copies of the release with every observation after a cut removed (see
+`audit/RESULTS.md`). The cut views have fewer windows than the released layout, and the window's
+own day file ends at its origin. Four kinds of check stopped such a run. They are relaxed as follows;
+on the released data every value and output is unchanged (`evidence/reproduction_checks.md` §5).
+SHA prefixes are the previous commit -> this one.
+
+- Fixed row and window counts of the 5-window layout now follow `window_index.csv`. Each step checks
+  its rows against the serving map that `prepare.py` binds to `submission_key.csv`:
+  `pipeline/onset_sources.py` (`b459b497` -> `f0830f7f`; 6 key rows per step-6 decision),
+  `serving_stage/prepare.py`, `make_never_empty_fallback.py` (`cd07bf78` -> `30a9cf26`),
+  `make_r16b_bits.py` (`304d1014` -> `36dc81e1`), `s1_serve_prob.py` (`8d818a30` -> `28bc912c`),
+  `make_r21a_bits.py` (`f0f5be97` -> `941a5886`), `r22_serve.py` (`c3fbc549` -> `543d40d4`) and
+  `make_ongoing_source.py` (`c7a7be85` -> `31b15519`).
+- `PublishedPanel.day` (`queue_data/e_data.py`) asserted that a masked day file holds all 288 slots
+  of every link. `e_data.py` is pinned by `queue_data/INPUT_MANIFEST.json` and keeps its bytes;
+  `serving_stage/prepare.py` (`c159cb90` -> `05d6d9c8`) replaces the method with a copy that lacks
+  only this assert. Rows are placed by timestamp in the links x 288 grid as before, absent cells stay
+  NaN, and its readers use the slots up to T.
+- A panel without ongoing windows in a split: `prepare.py` no longer fails on the per-panel cleanup.
+- A panel without windows in a split: `pipeline/onset_head_serve.py` (`62968bff` -> `90e33419`) skips
+  it.

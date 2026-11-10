@@ -76,6 +76,8 @@ def main():
     for split in SPLITS:
         for panel in panels:
             s = TI.features_for_split(panel, split, oblique=True, dispersion=True, clock=True, origin_obs=True, prior_dates=tuple(fitdates))
+            if len(s) == 0:  # package edit (2026-11-10): no window of this panel in this split's window_index
+                continue
             # Onset windows only, step 6 (T+30), the step the onset head predicts.
             s = s[s.condition.eq('queue_onset') & s.step.eq(6)].copy().reset_index(drop=True)
             # Serving's explicit cell identities map to training's physical link axis.

@@ -1,0 +1,124 @@
+{
+ "name": "c12",
+ "window_id": "Q2_D7_I10_W_private_010",
+ "tau": "2031-04-17T15:15Z",
+ "splits": "validation private",
+ "strict": false,
+ "drop_stamps": 0,
+ "note": "last window of the private split",
+ "windows": 160,
+ "onset_windows": 80,
+ "ongoing_windows": 80,
+ "cells": 174000,
+ "changed": 0,
+ "missing": 0,
+ "extra": 0,
+ "at_cut_cells": 642,
+ "at_cut_changed": 0,
+ "wall_s": 545,
+ "changed_windows": [],
+ "onset": {
+  "windows": 80,
+  "cells": 87000,
+  "changed": 0,
+  "missing": 0,
+  "extra": 0,
+  "queued": 307,
+  "at_cut_windows": [],
+  "at_cut_cells": 0,
+  "at_cut_changed": 0,
+  "changed_windows": []
+ },
+ "ongoing": {
+  "windows": 80,
+  "cells": 87000,
+  "changed": 0,
+  "missing": 0,
+  "extra": 0,
+  "queued": 10028,
+  "at_cut_windows": [
+   "Q2_D7_I10_W_private_010"
+  ],
+  "at_cut_cells": 642,
+  "at_cut_changed": 0,
+  "changed_windows": []
+ },
+ "probs": {
+  "onset_head": {
+   "values": 14500,
+   "changed": 0,
+   "max_abs_diff": 0.0,
+   "at_cut_values": 0,
+   "at_cut_changed": 0,
+   "at_cut_max_abs_diff": 0.0,
+   "earlier_changed": 0,
+   "earlier_max_abs_diff": 0.0
+  },
+  "onset_component": {
+   "values": 14500,
+   "changed": 0,
+   "max_abs_diff": 0.0,
+   "at_cut_values": 0,
+   "at_cut_changed": 0,
+   "at_cut_max_abs_diff": 0.0,
+   "earlier_changed": 0,
+   "earlier_max_abs_diff": 0.0
+  },
+  "ongoing_A": {
+   "values": 87000,
+   "changed": 0,
+   "max_abs_diff": 0.0,
+   "at_cut_values": 642,
+   "at_cut_changed": 0,
+   "at_cut_max_abs_diff": 0.0,
+   "earlier_changed": 0,
+   "earlier_max_abs_diff": 0.0
+  },
+  "ongoing_parent": {
+   "values": 1044000,
+   "changed": 0,
+   "max_abs_diff": 0.0,
+   "at_cut_values": 7704,
+   "at_cut_changed": 0,
+   "at_cut_max_abs_diff": 0.0,
+   "earlier_changed": 0,
+   "earlier_max_abs_diff": 0.0
+  },
+  "ongoing_M1f": {
+   "values": 261000,
+   "changed": 0,
+   "max_abs_diff": 0.0,
+   "at_cut_values": 1926,
+   "at_cut_changed": 0,
+   "at_cut_max_abs_diff": 0.0,
+   "earlier_changed": 0,
+   "earlier_max_abs_diff": 0.0
+  },
+  "ongoing_M1sf": {
+   "values": 261000,
+   "changed": 0,
+   "max_abs_diff": 0.0,
+   "at_cut_values": 1926,
+   "at_cut_changed": 0,
+   "at_cut_max_abs_diff": 0.0,
+   "earlier_changed": 0,
+   "earlier_max_abs_diff": 0.0
+  },
+  "ongoing_PB": {
+   "values": 1044000,
+   "changed": 0,
+   "max_abs_diff": 0.0,
+   "at_cut_values": 7704,
+   "at_cut_changed": 0,
+   "at_cut_max_abs_diff": 0.0,
+   "earlier_changed": 0,
+   "earlier_max_abs_diff": 0.0
+  }
+ },
+ "prob_values": 2726000,
+ "prob_earlier_changed": 0,
+ "prob_earlier_max": 0.0,
+ "prob_at_cut_values": 19902,
+ "prob_at_cut_changed": 0,
+ "prob_at_cut_max": 0.0
+}
