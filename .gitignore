@@ -10,5 +10,6 @@ __pycache__/
 # Internal guide with links to the local research folder; not published
 /GUIDE.md
 
-# Technical report: sent to the organisers with the final package; not published here yet
-/report/
+# Report folder: only the English PDF is published
+/report/*
+!/report/TrafficFlowBench_TechnicalReport_Anton.pdf

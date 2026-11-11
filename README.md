@@ -12,7 +12,7 @@ with about 0.5 GB of models and tables.
 | Public leaderboard | 0.90115 |
 | Private leaderboard | 0.89493 (rank 12) |
 | SHA256 of the submitted CSV | `cf5869e23d8bf063d37e6636355f66b8385be1ee7e7257a9943a16783ac00fc5` |
-| Technical report | sent to the organisers with the final package |
+| Technical report | [`report/TrafficFlowBench_TechnicalReport_Anton.pdf`](report/TrafficFlowBench_TechnicalReport_Anton.pdf) |
 
 The system has four parts, one per task:
 
@@ -43,7 +43,8 @@ The system has four parts, one per task:
 `docs/METHOD_OVERVIEW.md` describes each step, with three method diagrams in `docs/figures/`.
 `TRAINING.md` documents how every shipped model was trained. Every program carries docstrings that
 explain its role, inputs and outputs. The technical report gives the evaluation and the error
-analysis.
+analysis, with the development path, model settings and the Task 2 information boundary in its
+appendix.
 
 ## Running
 
@@ -143,6 +144,7 @@ trafficflowbench/          programs and frozen train-only artifacts, at their or
 training/                  the programs that trained the frozen models (record; not run)
 docs/                      method overview and diagrams
 evidence/                  submission record, reproduction and time-rule checks
+report/                    technical report (PDF)
 audit/                     Task 2 truncation audit (delete everything after T, rerun, compare)
 third_party/               licence texts of the included third-party code
 checksums.txt              SHA256 of every file; check with `shasum -a 256 -c checksums.txt`
