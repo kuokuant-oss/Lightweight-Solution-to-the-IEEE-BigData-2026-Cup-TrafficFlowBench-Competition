@@ -1,9 +1,10 @@
-# TrafficFlowBench 2026 — Team Anton
+# Following the Bottleneck: A Lightweight Solution to the IEEE BigData 2026 Cup TrafficFlowBench
 
-**Learned state reconstruction with physical projections, plus site- and block-structured queue
-decoding.** This is the code and the frozen models for our entry in the
+Team Anton. This repository holds the code and the frozen models of our entry in the
 [2026 IEEE Big Data Traffic Flow Bench](https://www.kaggle.com/competitions/2026-ieee-big-data-traffic-flow-bench).
-It reproduces our selected final submission from the released data.
+One script rebuilds the selected final submission from the released data. Gradient-boosted trees and
+small regressions carry the whole solution: training and the full rerun both run on one laptop CPU,
+with about 0.5 GB of models and tables.
 
 | | |
 |---|---|
@@ -15,26 +16,29 @@ It reproduces our selected final submission from the released data.
 
 The system has four parts, one per task:
 
-1. **Task 1, state reconstruction (Task 3 is scored on it).**
-   - A gradient-boosted stack over five classical reconstructions, refined by a residual model.
-   - Two physical density projections, so that the reconstructed speed, flow and density agree with
-     the fundamental diagram.
-   - A CatBoost capacity blend.
-   - The 90-minute holes that the Task 2 windows blank out get their own models:
-     - a boundary-conditioned hole model;
-     - a two-state (free-flow / queued) speed expectation;
-     - a per-split queue probability that reads the on-ramp counts inside the hole as a queue sensor.
-2. **Task 2 onset.**
+1. **Task 1, traffic state (Task 3 is scored on it).**
+   - A LightGBM stack over five classical reconstructions, refined by a residual correction, with a
+     CatBoost second residual learner at half weight.
+   - Density projections onto q = k·v, so that speed, flow and density agree with the fundamental
+     diagram, with a refit below 0.85 of free-flow speed.
+   - The 90-minute blanked interval after each Task 2 origin gets its own models: a gap model built on
+     the interval's boundaries, a month correction, and a two-state (free / queued) speed weighted by a
+     queue probability that reads the on-ramp counts inside the interval.
+2. **Task 2, new queues (onset).**
    - Only the step at T+30 is predicted.
-   - On corridors with several bottlenecks, a conditional logit picks the queuing site within each
-     window, and a train template gives the queue's extent.
-   - Elsewhere, train co-switching blocks are decoded.
-3. **Task 2 ongoing.**
-   - LightGBM link probabilities, with physically monotone constraints on the state features.
-   - The selector spacing rule of the official windows is corrected.
-   - Decoding is by train blocks at threshold 0.45.
-4. **Task 4.** Path flows by regularised non-negative least squares against the released link counts
-   and the weak OD prior.
+   - On the three corridors with several bottlenecks: a breakdown-risk model per bottleneck, a
+     conditional logit that picks the bottleneck that breaks first, and that bottleneck's queue-extent
+     template.
+   - On the four corridors with one dominant bottleneck: a link model with onset-conditional
+     incidence, decided per co-switching link group. The fifth corridor keeps per-link thresholds.
+3. **Task 2, existing queues (ongoing).**
+   - Three LightGBM ensembles: the location-agnostic one at weight 0.25, the mean of the selection-aware
+     and monotone ones at 0.75.
+   - Training windows are cut by the replicated official selection rule, and the selection-aware
+     inputs follow its 360-minute spacing.
+   - Decisions per co-switching link group at 0.45.
+4. **Task 4, path flows.** The organisers' estimator: non-negative least squares against the released
+   link counts, regularised toward the weak OD prior.
 
 `docs/METHOD_OVERVIEW.md` describes each step, with three method diagrams in `docs/figures/`.
 `TRAINING.md` documents how every shipped model was trained. Every program carries docstrings that
@@ -118,10 +122,10 @@ Assumptions about the new data:
   - same-split days strictly before the query day;
   - the training split.
 
-  Nothing after T is read, including ramps inside the window's own hole and the mainline after the
-  hole. The trained Task 2 models were fitted on the training split only (through 2031-02-28).
+  Nothing after T is read, including ramps inside the window's own blanked interval and the mainline
+  after it. The trained Task 2 models were fitted on the training split only (through 2031-02-28).
 - **Task 1 is offline.** Some Task 1 heads are fitted at run time on each split's own observed cells
-  (pseudo-holes cut from observed data). This is part of the method and runs inside the entry script.
+  (pseudo-intervals cut from observed data). This is part of the method and runs inside the entry script.
 - **Paths.** The programs keep the absolute paths of the machine they were written on.
   `trafficflowbench/scripts/ssd_runtime.py` maps those roots onto the run tree when the program
   starts. The programs therefore keep the code of the versions that produced the submission;
