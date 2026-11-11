@@ -50,8 +50,21 @@ Requirements:
   `sample_submission.csv`, `corridors/`, `task1/`, `task2/` and `task4/`.
 - CPU only. No GPU is used.
 
+Install the environment with pip:
+
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
+```
+
+or with [uv](https://docs.astral.sh/uv/), which also downloads Python 3.12 when it is missing:
+
+```bash
+uv venv -p 3.12 .venv && uv pip install --python .venv/bin/python -r requirements.txt
+```
+
+Then run:
+
+```bash
 ./run_reproduce.sh --data /path/to/kaggle_public --out /path/to/output_dir --python .venv/bin/python
 ```
 
