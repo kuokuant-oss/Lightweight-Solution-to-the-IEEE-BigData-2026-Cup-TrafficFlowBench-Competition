@@ -36,7 +36,7 @@ The system has four parts, one per task:
 4. **Task 4.** Path flows by regularised non-negative least squares against the released link counts
    and the weak OD prior.
 
-`docs/METHOD_OVERVIEW_zh.md` describes each step, with three method diagrams in `docs/figures/`.
+`docs/METHOD_OVERVIEW.md` describes each step, with three method diagrams in `docs/figures/`.
 `TRAINING.md` documents how every shipped model was trained. Every program carries docstrings that
 explain its role, inputs and outputs. The technical report gives the evaluation and the error
 analysis.
