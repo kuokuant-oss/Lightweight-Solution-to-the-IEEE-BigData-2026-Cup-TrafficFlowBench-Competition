@@ -1,5 +1,8 @@
 # Following the Bottleneck: A Lightweight Solution to the IEEE BigData 2026 Cup TrafficFlowBench
 
+**Final ranking: 8th of 801 teams (Top 10) in the IEEE Big Data Cup 2026 TrafficFlowBench.** The
+organisers reran this code and verified the reproduced submission.
+
 Team Anton. This repository holds the code and the frozen models of our entry in the
 [2026 IEEE Big Data Traffic Flow Bench](https://www.kaggle.com/competitions/2026-ieee-big-data-traffic-flow-bench).
 One script rebuilds the selected final submission from the released data. Gradient-boosted trees and
@@ -8,11 +11,14 @@ with about 0.5 GB of models and tables.
 
 | | |
 |---|---|
+| Final ranking | **8th of 801 (Top 10)**, reproduced and verified by the organisers |
 | Selected submission | `submission_R26c_R21a_BND_T45.csv`, Kaggle 56745207 |
 | Public leaderboard | 0.90115 |
-| Private leaderboard | 0.89493 (rank 12) |
+| Private leaderboard | 0.89493 |
 | SHA256 of the submitted CSV | `cf5869e23d8bf063d37e6636355f66b8385be1ee7e7257a9943a16783ac00fc5` |
 | Technical report | [`report/TrafficFlowBench_TechnicalReport_Anton.pdf`](report/TrafficFlowBench_TechnicalReport_Anton.pdf) |
+
+<img src="docs/final_ranking.png" alt="Official TrafficFlowBench final ranking of the IEEE Big Data Cup 2026: Team Anton is 8th with a private score of 0.89493" width="600">
 
 The system has four parts, one per task:
 
@@ -162,3 +168,7 @@ READMEs explain each name.
 - The shipped models were trained on the training split only.
 - No external dataset, pretrained model or paid API is used. See `THIRD_PARTY_NOTICES.md` for the
   open-source libraries.
+
+<sub>On the Kaggle private leaderboard, which lists every team that submitted, the same score
+(0.89493) shows at position 12 of 801. The official final ranking lists only the registered
+teams.</sub>
