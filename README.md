@@ -18,7 +18,7 @@ with about 0.5 GB of models and tables.
 | SHA256 of the submitted CSV | `cf5869e23d8bf063d37e6636355f66b8385be1ee7e7257a9943a16783ac00fc5` |
 | Technical report | [`report/TrafficFlowBench_TechnicalReport_Anton.pdf`](report/TrafficFlowBench_TechnicalReport_Anton.pdf) |
 
-<img src="docs/final_ranking.png" alt="Official TrafficFlowBench final ranking of the IEEE Big Data Cup 2026: Team Anton is 8th with a private score of 0.89493" width="600">
+<img src="docs/final_ranking.jpg" alt="Official TrafficFlowBench final ranking of the IEEE Big Data Cup 2026: Team Anton is 8th with a private score of 0.89493" width="600">
 
 The system has four parts, one per task:
 
