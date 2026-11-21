@@ -11,7 +11,7 @@ with about 0.5 GB of models and tables.
 
 | | |
 |---|---|
-| Final ranking | **8th of 801 (Top 10)**, reproduced and verified by the organisers |
+| Final ranking | **8th of 801 (Top 10)** |
 | Selected submission | `submission_R26c_R21a_BND_T45.csv`, Kaggle 56745207 |
 | Public leaderboard | 0.90115 |
 | Private leaderboard | 0.89493 |
